@@ -1,5 +1,6 @@
 // App.js
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import DeviceInfo from 'react-native-device-info';
 import {
   SafeAreaView,
   View,
@@ -10,142 +11,295 @@ import {
   Modal,
   Pressable,
   Alert,
+  Dimensions,
+  Animated,
+  DimensionValue,
 } from "react-native";
 import Swiper from "react-native-swiper";
 import AntDesign from "@expo/vector-icons/AntDesign";
 import { Redirect, useRouter, useFocusEffect } from "expo-router";
 import { SwipeListView } from "react-native-swipe-list-view";
-// 生成当天时间块数据（示例数据）
+
+const genMockTimeblock = () => {
+  return {
+    id: 4,
+    goal:1,
+    name: "Task5",
+    startTime: new Date(2025, 5, 8, 9, 0),
+    endTime: new Date(2025, 5, 8, 10, 0),
+    event: "上课",
+    details: {
+      location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
+      description: "fruit",
+    },
+    completed: null,
+  };
+};
 
 const mockTasks = [
   {
     id: 1,
+    goal:1,
+    date: "2025-5-9",
     name: "Task 1",
-    startTime: "08:00",
-    endTime: "09:00",
+    startTime: new Date(2025, 4, 9, 9, 0),
+    endTime: new Date(2025, 4, 9, 11, 0),
     event: "吃饭",
     details: {
       location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
       description: "fruit",
+      subs: [],
     },
+    completed: null,
+    next: 4, //taskid
+    dayPoints: 10,
+    priority: 1,
+    belongTo: 1, //goal id
   },
   {
     id: 2,
-    name: "Task 2",
-    startTime: "09:00",
-    endTime: "10:00",
-    event: "上课",
+    goal: 1,
+    date: "2025-10-15",
+    name: "Task 1",
+    startTime: new Date(2025, 4, 9, 9, 0),
+    endTime: new Date(2025, 4, 9, 13, 0),
+    event: "吃饭",
     details: {
       location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
       description: "fruit",
+      subs: [],
     },
+    completed: null,
+    next: 4, //taskid
+    dayPoints: 10,
+    priority: 1,
+    belongTo: 1, //goal id
   },
   {
     id: 3,
-    name: "Task 3",
-    startTime: "10:00",
-    endTime: "11:00",
-    event: "上课",
+    goal: 2,
+    date: "2025-10-15",
+    name: "Task 1",
+    startTime: new Date(2025, 4, 9, 9, 0),
+    endTime: new Date(2025, 4, 9, 10, 0),
+    event: "吃饭",
     details: {
       location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
       description: "fruit",
+      subs: [],
     },
+    completed: null,
+    next: 4, //taskid
+    dayPoints: 10,
+    priority: 1,
+    belongTo: 1, //goal id
   },
 ];
+const convertTimeToMinutes = (date) => {
+  return date.getHours() * 60 + date.getMinutes();
+};
 
-// 主屏幕 - 时间块界面
-const ScheduleScreen = ({ scheduleData, setScheduleData }) => {
+//
+const ScheduleScreen = ({}) => {
+  const [scheduleData, setScheduleData] = useState(
+    mockTasks.filter((task) => {
+      const today = new Date()
+      return task.startTime.getDate() == today.getDate() &&
+      task.startTime.getMonth() == today.getMonth() &&
+      task.startTime.getFullYear() == today.getFullYear()}).map((item) => {
+      return {
+        ...item,
+        fold: true,
+        editNDelete: false,
+      };
+    })
+  );
   const [modalVisible, setModalVisible] = useState(false);
-  const [fold, setFold] = useState(
-    scheduleData.map((item) => {
-      return true;
-    })
-  );
-  const [editNDelete, setEditNDelete] = useState(
-    scheduleData.map((item) => {
-      return false;
-    })
-  );
-  console.log(fold);
+
+  const addToScheduleData = (timeBlock) => {
+    const newData = [
+      ...scheduleData,
+      { ...timeBlock, fold: false, editNDelete: false },
+    ];
+    newData.sort((a, b) => a.startTime - b.startTime + 0.0001 * Math.sign(a.endTime - b.endTime));
+    setScheduleData(newData);
+  };
+  const deleteFromScheduleData = (id) => {
+    const newData = [...scheduleData].filter((item) => item.id !== id);
+    newData.sort(
+      (a, b) =>
+        convertTimeToMinutes(a.startTime) - convertTimeToMinutes(b.startTime)
+    );
+    setScheduleData(newData);
+  };
+  const changeScheduleData = (id, property, value) => {
+    const newData = [...scheduleData];
+    const index = newData.findIndex((item) => item.id === id);
+    if (index === -1) {
+      return;
+    }
+    newData[index] = { ...newData[index], [property]: value };
+    newData.sort(
+      (a, b) =>
+        convertTimeToMinutes(a.startTime) - convertTimeToMinutes(b.startTime)
+    );
+    setScheduleData(newData);
+  };
+
+  //tik trick
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCount(count + 1);
+      if (count > 60) {
+        setCount(0);
+      }
+    }, 1000); 
+    return () => clearInterval(timer);
+  }, [count]);
+  function calculateTimeProgress(currentTime, startTime, endTime) {
+    // 转换为时间戳（毫秒）
+    const start = startTime.getTime();
+    const end = endTime.getTime();
+    const current = currentTime.getTime();
+    // 处理异常时间范围
+    if (start >= end) {
+      return current >= start ? 1 : 0; // 无效时间段视为已结束或未开始
+    }
+
+    // 边界判断
+    if (current <= start) return 0;
+    if (current >= end) return 1;
+
+    // 计算比例
+    const totalDuration = end - start;
+    const elapsedTime = current - start;
+    return elapsedTime / totalDuration;
+  }
   const renderTimeBlock = ({ item, index }) => {
+
     return (
       <Pressable
-        style={[styles.timeBlock, { backgroundColor: "#b3e5fc" }]}
+        style={[styles.timeBlock, { backgroundColor: "#DEF3FD" }]} //
         onPress={() => {
-          const newfold = [];
-          for (const i of fold) {
-            newfold.push(i);
-          }
-          newfold[index] = !fold[index];
-          console.log(newfold);
-          setFold(newfold);
+          changeScheduleData(item.id, "fold", !item.fold);
         }}
         onLongPress={() => {
-          const newEditNDelete = [];
-          for (const i of editNDelete) {
-   -         newEditNDelete.push(i);
-          }
-          newEditNDelete[index] = !editNDelete[index];
-          console.log(newEditNDelete);
-          setEditNDelete(newEditNDelete);
+          changeScheduleData(item.id, "editNDelete", !item.editNDelete);
         }}
         onBlur={() => {}}
       >
-        <View>
+        <View
+          style={{
+            borderRadius: 10,
+          }}
+        >
           <View
             style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              marginTop: 15,
-              marginBottom: 15,
+              // backgroundColor: "#",
+              borderRadius: 10,
+              overflow: "hidden",
+              marginTop: 20,
+              marginLeft: 20,
+              marginRight: 20,
+              marginBottom: 20,
             }}
           >
-            <Text style={styles.timeText}>{item.startTime} - {item.endTime}</Text>
-            <Text style={styles.timeText}>{item.event}</Text>
-          </View>
-          {!fold[index] && (
             <View
-              style={{ flexDirection: "row", justifyContent: "space-between" }}
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+              }}
             >
-              <Text style={styles.eventText}>{item.details.description}</Text>
-              <View style={{ flexDirection: "row" }}>
+              <Text style={styles.timeText}>
+                {item.startTime.toLocaleTimeString("en-US", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                })}{" "}
+                -{" "}
+                {item.endTime.toLocaleTimeString("en-US", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                })}
+              </Text>
+              <Text style={styles.timeText}>{item.event}</Text>
+            </View>
+            {!item.fold && (
+              <View
+                style={{
+                  marginTop: 10,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                }}
+              >
+                <Text style={styles.eventText}>{item.details.description}</Text>
+                {/* <View style={{ flexDirection: "row" }}>
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      console.log("");
+                    }}
+                  >
+                    <AntDesign
+                      name="checkcircleo" 
+                      size={24}
+                      color="green"
+                      style={{ marginRight: 4 }}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    <AntDesign name="closecircleo" size={24} color="red" />
+                  </TouchableOpacity>
+                </View> */}
+              </View>
+            )}
+            {item.editNDelete && (
+              <View>
                 <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    console.log("");
-                  }}
+                // style={{
+                //   position: "fixed",
+                //   width: Dimensions.get("window").width,
+                //   height: Dimensions.get("window").height,
+                //   backgroundColor: "transparent",
+                // }}
+                // onPress={() => {
+                //   changeScheduleData(item.id, "editNDelete", !item.editNDelete);
+                // }}
                 >
-                  <AntDesign
-                    name="checkcircleo"
-                    size={24}
-                    color="green"
-                    style={{ marginRight: 4 }}
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    console.log("");
-                  }}
-                >
-                  <AntDesign name="closecircleo" size={24} color="red" />
+                  <TouchableOpacity onPress={() => {}}>
+                    <Text>Edit</Text>
+                  </TouchableOpacity>
                 </TouchableOpacity>
               </View>
-            </View>
-          )}
-          {editNDelete[index] && (
-            <View>
-              <TouchableOpacity>
-                <Text>Edit</Text>
-              </TouchableOpacity>
-            </View>
+            )}
+          </View>
+          {!item.editNDelete && item.fold && item.completed === null && (
+            <View
+              style={[
+                {
+                  borderRadius: 10,
+                  position: "absolute",
+                  height: "100%", //F89466
+                  backgroundColor: "#F56727", //
+                  opacity: 0.5,
+                  width: `${(calculateTimeProgress(new Date(), item.startTime, item.endTime)  * 100).toFixed(1)}%` as DimensionValue,
+                },
+              ]}
+            ></View>
           )}
         </View>
       </Pressable>
     );
   };
+  const SWIPETHRESHOLD = 0.4 * Dimensions.get("window").width;
+  const PERSISTENCE_DURATION = 200;
   const renderSwipeItem = ({ item, index }) => {
-    console.log("renderHiddenItem", item, index);
     return (
       <View
         style={{
@@ -157,43 +311,25 @@ const ScheduleScreen = ({ scheduleData, setScheduleData }) => {
         <Pressable
           style={{
             borderRadius: 10,
-            backgroundColor: "#FF9EB3",
+            backgroundColor: "red",
             marginLeft: 10,
             justifyContent: "center",
             height: "100%", // 容器高度
           }}
-        >
-          <Text
-            style={{
-              textAlign: "center",
-              width: "50",
-            }}
-          >
-            Delete
-          </Text>
-        </Pressable>
+        ></Pressable>
         <Pressable
           style={{
             borderRadius: 10,
-            backgroundColor: "#8FD8F7",
+            backgroundColor: "green",
+            marginRight: 10,
             justifyContent: "center",
-            marginLeft: 10,
             height: "100%", // 容器高度
           }}
-          onPress={() => {}}
-        >
-          <Text
-            style={{
-              textAlign: "center",
-              width: "50",
-            }}
-          >
-            Edit
-          </Text>
-        </Pressable>
+        ></Pressable>
       </View>
     );
   };
+
   return (
     <View style={styles.screen}>
       <View>
@@ -218,6 +354,13 @@ const ScheduleScreen = ({ scheduleData, setScheduleData }) => {
           <View style={styles.centeredView}>
             <View style={styles.modalView}>
               <Text style={styles.modalText}>Hello World!</Text>
+
+              <Pressable
+                style={[styles.button, styles.buttonClose]}
+                onPress={() => addToScheduleData(genMockTimeblock())}
+              >
+                <Text style={styles.textStyle}>x</Text>
+              </Pressable>
               <Pressable
                 style={[styles.button, styles.buttonClose]}
                 onPress={() => setModalVisible(!modalVisible)}
@@ -231,55 +374,72 @@ const ScheduleScreen = ({ scheduleData, setScheduleData }) => {
       <Text style={styles.screenTitle}>Tasks TODO</Text>
 
       <SwipeListView
-        data={scheduleData}
+        data={scheduleData.filter((item) => item.completed === null)}
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
-        rightOpenValue={-120}
+        // rightOpenValue={-120}
         keyExtractor={(item) => item.id}
+        leftActivationValue={SWIPETHRESHOLD}
+        onLeftActionStatusChange={(rowData) => {
+          setTimeout(() => {
+            changeScheduleData(rowData.key, "completed", true);
+          }, PERSISTENCE_DURATION);
+        }}
+        rightActivationValue={-SWIPETHRESHOLD}
+        onRightActionStatusChange={(rowData) => {
+          setTimeout(() => {
+            changeScheduleData(rowData.key, "completed", false);
+          }, PERSISTENCE_DURATION);
+        }}
       />
 
       <Text style={styles.screenTitle}>Tasks Completed</Text>
 
       <SwipeListView
-        data={scheduleData}
+        data={scheduleData.filter((item) => item.completed)}
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
-        rightOpenValue={-120}
         keyExtractor={(item) => item.id}
+        rightActivationValue={-SWIPETHRESHOLD}
+        onRightActionStatusChange={(rowData) => {
+          setTimeout(() => {
+            changeScheduleData(rowData.key, "completed", false);
+          }, PERSISTENCE_DURATION);
+        }}
+      />
+      <Text style={styles.screenTitle}>Tasks Not Done</Text>
+
+      <SwipeListView
+        data={scheduleData.filter((item) => item.completed === false)}
+        renderItem={renderTimeBlock}
+        closeOnRowPress={true}
+        renderHiddenItem={renderSwipeItem}
+        keyExtractor={(item) => item.id}
+        leftActivationValue={SWIPETHRESHOLD}
+        onLeftActionStatusChange={(rowData) => {
+          setTimeout(() => {
+            changeScheduleData(rowData.key, "completed", true);
+          }, PERSISTENCE_DURATION);
+        }}
       />
     </View>
   );
 };
-
 // 日历屏幕
 export default function App() {
-  const [scheduleData, setScheduleData] = useState(mockTasks);
+  // const [scheduleData, setScheduleData] = useState(mockTasks);
+
   const [markedDates, setMarkedDates] = useState({
     "2025-03-20": {
       periods: [{ startingDay: true, endingDay: true, color: "#4a90e2" }],
     },
   });
 
-  const handleAddEvent = (timeBlock) => {
-    // 打开事件添加模态框的逻辑
-    const newData = scheduleData.map((item) => {
-      if (item.id === timeBlock.id) {
-        return { ...item, event: "示例事件", color: "#b3e5fc" };
-      }
-      return item;
-    });
-    setScheduleData(newData);
-  };
-
   return (
     <SafeAreaView style={styles.container}>
-      <ScheduleScreen
-        scheduleData={scheduleData}
-        setScheduleData={setScheduleData}
-      />
-
+      <ScheduleScreen />
       {/* <Swiper loop={false} showsPagination={false}>
         <CalendarScreen markedDates={markedDates} />
         <GoalScreen />
@@ -349,7 +509,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   timeBlock: {
-    padding: 15,
     borderRadius: 10,
     marginBottom: 10,
     shadowColor: "#000",
