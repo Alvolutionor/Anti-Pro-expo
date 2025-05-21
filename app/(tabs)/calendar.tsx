@@ -245,29 +245,49 @@ function seededRandom(seed) {
 }
 
 const CalendarTab = ({}) => {
-  const [random, setRandom] = useState(Math.random().toString());
   const router = useRouter();
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState([]);
-  const [goals, setGoals] = useState(mockGoals.map((goal,index) => { return { label: goal.name, value: index, id: goal.id } }));
-  const [colors, setColors] = useState(generateDistinctColors(goals.length))
-  const [markedDates, setMarkedDates] = useState(convertTasksToMarkedDates(mockGoals, colors)(value));
+  const [goals, setGoals] = useState(
+    mockGoals.map((goal, index) => ({
+      label: goal.name,
+      value: index,
+      id: goal.id,
+    }))
+  );
+  const [colors, setColors] = useState(generateDistinctColors(goals.length));
+  const [markedDates, setMarkedDates] = useState(
+    convertTasksToMarkedDates(mockGoals, colors)(value)
+  );
+
   useEffect(() => {
-    console.log(convertTasksToMarkedDates(mockGoals, colors)(value))
-    setMarkedDates(convertTasksToMarkedDates(mockGoals, colors)(value));
-    onPressRefreshCalendar();
-  }, [goals, value]);
-  console.log(markedDates);
-  console.log(value);
+    const updatedMarkedDates = convertTasksToMarkedDates(mockGoals, colors)(value);
+    setMarkedDates(updatedMarkedDates);
+  }, [value, goals]);
+
   const onPressRefreshCalendar = () => {
-    setRandom(Math.random().toString());
+    const today = new Date();
+    setSelectedDate(today);
+
+    const todayString = today.toISOString().split("T")[0]; // 格式化为 YYYY-MM-DD
+    const updatedMarkedDates = {
+      ...markedDates,
+      [todayString]: {
+        ...markedDates[todayString],
+        selected: true,
+        selectedColor: "#4a90e2",
+      },
+    };
+
+    setMarkedDates(updatedMarkedDates);
   };
+
   return (
     <View style={styles.screen}>
       <Text style={styles.screenTitle}>Goals Overview</Text>
       <Button onPress={onPressRefreshCalendar} title="Back to today" color="#8FD8F7" />
       <Calendar
-        key={random}
         markedDates={markedDates}
         markingType={"multi-period"}
         theme={{
@@ -275,19 +295,35 @@ const CalendarTab = ({}) => {
           selectedDayBackgroundColor: "#4a90e2",
         }}
         onDayPress={(day) => {
-          router.push(`/day-view/${day.dateString}`);
+          const selectedDayString = day.dateString;
+
+          // 更新选中的日期
+          setSelectedDate(new Date(selectedDayString));
+
+          // 更新 markedDates
+          const updatedMarkedDates = {
+            ...markedDates,
+            [selectedDayString]: {
+              ...markedDates[selectedDayString],
+              selected: true,
+              selectedColor: "#4a90e2",
+            },
+          };
+
+          setMarkedDates(updatedMarkedDates);
+
+          // 跳转到 day-view 页面
+          router.push(`/day-view/${selectedDayString}`);
         }}
       />
       <View>
-        {/* style={{ flexDirection: "row", justifyContent: "space-between" }} */}
         <Text style={{ marginTop: 15, marginBottom: 15 }}>Show Task bar</Text>
-        <DropDownPicker //！！！modified picker.js value must be num
-          //   badgeColors={["white"]}
-          multipleText={"{count} goals selected"}
+        <DropDownPicker
+          multipleText="{count} goals selected"
           multiple={true}
           open={open}
           value={value}
-          itemKey = {"id"}
+          itemKey={"id"}
           items={goals}
           setOpen={setOpen}
           setValue={setValue}
@@ -295,7 +331,7 @@ const CalendarTab = ({}) => {
           placeholder={"Choose a task."}
           theme="LIGHT"
           mode="BADGE"
-          badgeDotColors={colors} //"#e9c46a", "#e76f51", "#8ac926", "#00b4d8", "#e9c46a"
+          badgeDotColors={colors}
         />
       </View>
     </View>
