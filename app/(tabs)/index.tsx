@@ -349,15 +349,27 @@ const ScheduleScreen = ({}) => {
         >
           <TouchableWithoutFeedback
             onPress={() => {
-              Keyboard.dismiss(); // 点击屏幕其他位置关闭键盘
-              setShowStartTimePicker(false); // 关闭 Start Time Picker
-              setShowEndTimePicker(false); // 关闭 End Time Picker
-              setShowEventPicker(false); // 关闭 Tag Picker
+              if (showStartTimePicker || showEndTimePicker || showEventPicker) {
+                setShowStartTimePicker(false); // 关闭 Start Time Picker
+                setShowEndTimePicker(false); // 关闭 End Time Picker
+                setShowEventPicker(false); // 关闭 Tag Picker
+                return 
+              }
+              else {
+                setModalVisible(false); // 关闭 Modal
+              }
             }}
           >
             <View style={styles.centeredView}>
               <TouchableWithoutFeedback
                 onPress={() => {
+                  if (showStartTimePicker || showEndTimePicker || showEventPicker) {
+                    Keyboard.dismiss(); // 点击屏幕其他位置关闭键盘
+                    setShowStartTimePicker(false); // 关闭 Start Time Picker
+                    setShowEndTimePicker(false); // 关闭 End Time Picker
+                    setShowEventPicker(false); // 关闭 Tag Picker
+                  }
+
                   // 阻止点击 Modal 内部关闭 Modal
                 }}
               >
@@ -420,7 +432,6 @@ const ScheduleScreen = ({}) => {
                           mode="datetime"
                           display="spinner"
                           onChange={(event, selectedDate) => {
-                            setShowStartTimePicker(false); // 关闭 Start Time Picker
                             if (selectedDate) {
                               setNewTaskStartTime(selectedDate.toISOString());
                             }
@@ -429,12 +440,14 @@ const ScheduleScreen = ({}) => {
                       )}
                     </View>
 
+
+
                     {/* More Button */}
                     <Pressable
-                      style={[styles.button, styles.addButton]} // 使用与 Add Task 相同的样式
+                      style={styles.moreButton}
                       onPress={() => setShowMoreFields(!showMoreFields)} // 切换 More 按钮的显示状态
                     >
-                      <Text style={styles.buttonText}>
+                      <Text style={styles.moreButtonText}>
                         {showMoreFields ? "Hide More" : "More"}
                       </Text>
                     </Pressable>
@@ -446,13 +459,21 @@ const ScheduleScreen = ({}) => {
                         <View style={styles.dateTimeContainer}>
                           <Text style={styles.label}>End Time (Optional)</Text>
                           <TouchableOpacity
-                            style={styles.dateTimePicker}
+                            style={[
+                              styles.dateTimePicker,
+                              !newTaskStartTime && { backgroundColor: "#ddd" }, // 禁用时改变背景色
+                            ]}
                             onPress={() => {
+                              if (!newTaskStartTime) {
+                                Alert.alert("Error", "Please select Start Time first.");
+                                return;
+                              }
                               setShowEndTimePicker(!showEndTimePicker); // 切换 End Time Picker 的显示状态
                               setShowStartTimePicker(false); // 关闭其他 Picker
                               setShowEventPicker(false); // 关闭其他 Picker
                               Keyboard.dismiss(); // 关闭键盘
                             }}
+                            disabled={!newTaskStartTime} // 禁用按钮
                           >
                             <Text style={styles.dateTimeText}>
                               {newTaskEndTime
@@ -472,8 +493,8 @@ const ScheduleScreen = ({}) => {
                               value={newTaskEndTime ? new Date(newTaskEndTime) : new Date()}
                               mode="datetime"
                               display="spinner"
+                              minimumDate={newTaskStartTime ? new Date(newTaskStartTime) : undefined} // 设置最小值
                               onChange={(event, selectedDate) => {
-                                setShowEndTimePicker(false); // 关闭 End Time Picker
                                 if (selectedDate) {
                                   setNewTaskEndTime(selectedDate.toISOString());
                                 }
@@ -602,7 +623,7 @@ const ScheduleScreen = ({}) => {
                         const startTime = new Date(newTaskStartTime);
                         const endTime = newTaskEndTime
                           ? new Date(newTaskEndTime)
-                          : new Date(startTime.getTime() + 60 * 60 * 1000); // 默认持续 1 小时
+                          : new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate(), 23, 59); // 默认当天结束
 
                         const newTask = {
                           id: scheduleData.length + 1,
@@ -1018,6 +1039,7 @@ const styles = StyleSheet.create({
     height: 80, // 保持固定高度
   },
   addDetailButton: {
+    width:"30%", // 与输入框对齐
     marginTop: 10,
     padding: 10,
     borderRadius: 10,
@@ -1027,6 +1049,19 @@ const styles = StyleSheet.create({
   addDetailButtonText: {
     color: "white",
     fontSize: 14,
+    fontWeight: "bold",
+  },
+  moreButton: {
+    width: "100%",
+    marginTop: 10,
+    padding: 15,
+    borderRadius: 10,
+    backgroundColor: "#FFA500", // 使用橙色区分
+    alignItems: "center",
+  },
+  moreButtonText: {
+    color: "white",
+    fontSize: 16,
     fontWeight: "bold",
   },
 });
