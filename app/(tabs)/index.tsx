@@ -303,10 +303,10 @@ const ScheduleScreen = ({}) => {
             left: 0,
             right: 0,
             bottom: 0,
-            width: '100%', // 用 Dimensions.get('window').width 更安全
-            backgroundColor: 'rgba(0,0,0,0.2)',
-            borderRadius: 12,
-            overflow: 'hidden',
+            width: Math.min(Math.max((new Date() - item.startTime) / (item.endTime - item.startTime) * 100, 0), 100) + "%",
+            backgroundColor: "rgba(0, 0, 0, 0.2)",
+            borderRadius: 10,
+            overflow: "hidden"
           }}
         ></View>
       </Pressable>
