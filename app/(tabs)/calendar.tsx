@@ -1,134 +1,51 @@
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { View, StyleSheet, Text, Button } from "react-native";
+import { View, StyleSheet, Text, Button, Alert, Modal, TextInput, TouchableOpacity } from "react-native";
 import { Calendar } from "react-native-calendars";
 import DropDownPicker from "react-native-dropdown-picker";
+import { Picker } from '@react-native-picker/picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import {
+  getGoals,
+  getTasks,
+  GoalOut,
+  TaskOut,
+  createGoal,
+} from "../../utils/api"; // 假设你已在api.ts里导出类型和方法
+import { useSelector, useDispatch } from 'react-redux';
+import { RootState } from '../../store/store';
+import { setGoals } from '../../store/goalSlice';
 
-const mockGoals = [
-  {
-    id: 1,
-    name: "Task 1",
-    tasks: [1,2,6,5,8,9],
-    description:"Learn React Native",
-    achieved: false,
-    lifePoints: 10,
-    priority: 1,
-    scheduled: "recurrent", //temp, by date, for period
-    scheduled_param: 7, // null,  Date,  365(days)
-    // userID: 1,
-    //isDeleted: false, only in db
-  },
-  {
-    id: 2,
-    name: "Task 2",
-    tasks: [3,4,7],
-    description:"Learn React Native",
-    achieved: false,
-    lifePoints: 10,
-    priority: 1,
-    scheduled: "recurrent", //temp, by date, for period
-    scheduled_param: 7, // null,  Date,  365(days)
-    // userID: 1,
-    //isDeleted: false, only in db
-  },
-];
+function convertTasksToMarkedDates(goals: GoalOut[], tasks: TaskOut[], colors: string[]) {
+  const markedDatesByGoal: Record<number, any> = {};
 
-const mockTasks = [
-  {
-    id: 1,
-    goal:1,
-    date: "2025-5-9",
-    name: "Task 1",
-    startTime: new Date(2025, 4, 9, 9, 0),
-    endTime: new Date(2025, 5, 11, 11, 0),
-    event: "吃饭",
-    details: {
-      location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
-      description: "fruit",
-      subs: [],
-    },
-    completed: null,
-    next: 4, //taskid
-    dayPoints: 10,
-    priority: 1,
-    belongTo: 1, //goal id
-  },
-  {
-    id: 2,
-    goal: 1,
-    date: "2025-10-15",
-    name: "Task 1",
-    startTime: new Date(2025, 4, 9, 9, 0),
-    endTime: new Date(2025, 4, 9, 13, 0),
-    event: "吃饭",
-    details: {
-      location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
-      description: "fruit",
-      subs: [],
-    },
-    completed: null,
-    next: 4, //taskid
-    dayPoints: 10,
-    priority: 1,
-    belongTo: 1, //goal id
-  },
-  {
-    id: 3,
-    goal: 2,
-    date: "2025-10-15",
-    name: "Task 1",
-    startTime: new Date(2025, 5, 29, 9, 0),
-    endTime: new Date(2025, 5, 29, 10, 0),
-    event: "吃饭",
-    details: {
-      location: "https://www.google.com/maps/search/?api=1&query=lumen+field",
-      description: "fruit",
-      subs: [],
-    },
-    completed: null,
-    next: 4, //taskid
-    dayPoints: 10,
-    priority: 1,
-    belongTo: 1, //goal id
-  },
-];
-
-
-function convertTasksToMarkedDates(goals, colors) {
-  const markedDatesByGoal = {};
-
-  // Helper function to format a date as YYYY-MM-DD
-  function getLocalISOString(date) {
+  function getLocalISOString(date: Date) {
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
   }
 
   for (let index = 0; index < goals.length; index++) {
     const goal = goals[index];
     const goalColor = colors[index];
-    const markedDates = {};
+    const markedDates: Record<string, any> = {};
 
-    // Check if the goal has tasks
-    if (goal.tasks && goal.tasks.length > 0) {
-      const processedDates = new Set(); // Track dates already processed for this goal
+    if (goal.id && tasks.length > 0) {
+      const processedDates = new Set<string>();
 
-      for (const taskId of goal.tasks) {
-        // Find the task in the mockTasks array
-        const task = mockTasks.find((t) => t.id === taskId);
-        if (!task || !task.startTime || !task.endTime) continue;
+      for (const task of tasks.filter((t) => t.goalId === goal.id)) {
+        if (!task.startTime || !task.endTime) continue;
 
         const start = new Date(task.startTime);
         const end = new Date(task.endTime);
-        if (start > end) continue; // Ignore invalid time ranges
+        if (start > end) continue;
 
         let currentStart = new Date(start);
 
         while (currentStart <= end) {
           const currentDate = getLocalISOString(currentStart);
 
-          // Ensure only one line is drawn per goal per day
           if (processedDates.has(currentDate)) {
             currentStart.setDate(currentStart.getDate() + 1);
             currentStart.setHours(0, 0, 0, 0);
@@ -140,8 +57,8 @@ function convertTasksToMarkedDates(goals, colors) {
           const currentEnd = dayEnd < end ? dayEnd : new Date(end);
 
           const period = {
-            startingDay: currentStart.getTime() === start.getTime(), // Is this the task's start day?
-            endingDay: currentEnd.getTime() === end.getTime(),       // Is this the task's end day?
+            startingDay: currentStart.getTime() === start.getTime(),
+            endingDay: currentEnd.getTime() === end.getTime(),
             color: goalColor,
           };
 
@@ -150,36 +67,32 @@ function convertTasksToMarkedDates(goals, colors) {
           }
           markedDates[currentDate].periods.push(period);
 
-          // Mark this date as processed for the current goal
           processedDates.add(currentDate);
 
-          // Move to the next day
           currentStart = new Date(currentEnd);
           currentStart.setDate(currentStart.getDate() + 1);
           currentStart.setHours(0, 0, 0, 0);
         }
       }
     }
-
-    // Store markedDates for the current goal
-    markedDatesByGoal[index] = markedDates;
+    markedDatesByGoal[goal.id] = markedDates;
   }
-  function transformMarkedDatesToCalendarFormat(markedDatesArray) {
-    const transformedMarkedDates = {};
-  
+
+  function transformMarkedDatesToCalendarFormat(markedDatesArray: any[]) {
+    const transformedMarkedDates: Record<string, any> = {};
+
     markedDatesArray.forEach(({ date, periods }) => {
       if (!transformedMarkedDates[date]) {
         transformedMarkedDates[date] = { periods: [] };
       }
       transformedMarkedDates[date].periods.push(...periods);
     });
-  
+
     return transformedMarkedDates;
   }
 
-  // Return a function to get markedDates by goal ID
-  return (goalIds) => {
-    const combinedMarkedDates = [];
+  return (goalIds: number[]) => {
+    const combinedMarkedDates: any[] = [];
 
     for (const goalId of goalIds) {
       const goalMarkedDates = markedDatesByGoal[goalId] || {};
@@ -190,87 +103,155 @@ function convertTasksToMarkedDates(goals, colors) {
         });
       }
     }
-    // console.log("combinedMarkedDates", combinedMarkedDates[0].periods);
-
     return transformMarkedDatesToCalendarFormat(combinedMarkedDates);
   };
 }
-function hslToHex(h, s, l) {
+
+function hslToHex(h: number, s: number, l: number) {
   l /= 100;
-  const a = s * Math.min(l, 1 - l) / 100;
-  const f = n => {
+  const a = (s * Math.min(l, 1 - l)) / 100;
+  const f = (n: number) => {
     const k = (n + h / 30) % 12;
     const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-    return Math.round(255 * color).toString(16).padStart(2, '0');   // convert to Hex and prefix "0" if needed
+    return Math.round(255 * color)
+      .toString(16)
+      .padStart(2, "0");
   };
   return `#${f(0)}${f(8)}${f(4)}`;
 }
-function generateDistinctColors(count, options = {}) {
-  const { 
-      sMin = 70, 
-      sMax = 90, 
-      lMin = 60, 
-      lMax = 80,
-      seed = null  // 新增随机种子参数
-  } = options;
-  
+function generateDistinctColors(count: number, options = {}) {
+  const {
+    sMin = 70,
+    sMax = 90,
+    lMin = 60,
+    lMax = 80,
+    seed = null,
+  } = options as any;
+
   const colors = [];
   const goldenAngle = 137.508;
-  
-  // 可播种的随机数生成器
-  const random = (seed !== null) ? 
-      seededRandom(seed) : 
-      { next: () => Math.random() };
+
+  const random =
+    seed !== null
+      ? seededRandom(seed)
+      : { next: () => Math.random() };
 
   for (let i = 0; i < count; i++) {
-      const hue = (i * goldenAngle) % 360;
-      
-      // 使用可控随机源生成参数
-      const saturation = random.next() * (sMax - sMin) + sMin;
-      const lightness = random.next() * (lMax - lMin) + lMin;
+    const hue = (i * goldenAngle) % 360;
+    const saturation = random.next() * (sMax - sMin) + sMin;
+    const lightness = random.next() * (lMax - lMin) + lMin;
 
-      colors.push(`${hslToHex(hue.toFixed(2), saturation.toFixed(2), lightness.toFixed(2))}`);
+    colors.push(
+      `${hslToHex(
+        Number(hue.toFixed(2)),
+        Number(saturation.toFixed(2)),
+        Number(lightness.toFixed(2))
+      )}`
+    );
   }
-  
+  console.log("Generated colors:", colors);
   return colors;
 }
-function seededRandom(seed) {
+function seededRandom(seed: number) {
   let state = seed;
   return {
-      next: () => {
-          state = (state * 9301 + 49297) % 233280;
-          return state / 233280;
-      }
+    next: () => {
+      state = (state * 9301 + 49297) % 233280;
+      return state / 233280;
+    },
   };
+}
+
+// 推荐固定色板，保证每个 badge 颜色都明显区分
+const COLOR_PALETTE = [
+  '#FF6B6B', // Red
+  '#FFD93D', // Yellow
+  '#6BCB77', // Green
+  '#4D96FF', // Blue
+  '#A66CFF', // Purple
+  '#FF922B', // Orange
+  '#43C6AC', // Teal
+  '#FF5EAE', // Pink
+  '#5F6CAF', // Indigo
+  '#B2B09B', // Olive
+];
+
+// 用固定色板分配颜色，数量不够时循环
+function getGoalColors(count: number) {
+  const colors: string[] = [];
+  for (let i = 0; i < count; i++) {
+    colors.push(COLOR_PALETTE[i % COLOR_PALETTE.length]);
+  }
+  return colors;
 }
 
 const CalendarTab = ({}) => {
   const router = useRouter();
+  const dispatch = useDispatch();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState([]);
-  const [goals, setGoals] = useState(
-    mockGoals.map((goal, index) => ({
-      label: goal.name,
-      value: index,
-      id: goal.id,
-    }))
-  );
-  const [colors, setColors] = useState(generateDistinctColors(goals.length));
-  const [markedDates, setMarkedDates] = useState(
-    convertTasksToMarkedDates(mockGoals, colors)(value)
-  );
+  const [value, setValue] = useState<number[]>([]);
+  const [colors, setColors] = useState<string[]>([]);
+  const [markedDates, setMarkedDates] = useState<any>({});
+  const [addGoalVisible, setAddGoalVisible] = useState(false);
+  const [newGoalName, setNewGoalName] = useState("");
+  const [newGoalDesc, setNewGoalDesc] = useState("");
+  const [addingGoal, setAddingGoal] = useState(false);
+  const [newGoalAchieved, setNewGoalAchieved] = useState(false);
+  const [newGoalLifePoints, setNewGoalLifePoints] = useState<string>("");
+  const [newGoalPriority, setNewGoalPriority] = useState<string>("");
 
+  // 直接用 reduxGoals 和 reduxTasks，无需本地 goals/tasks state
+  const reduxGoals = useSelector((state: RootState) => state.goal.goals);
+  const reduxTasks = useSelector((state: RootState) => state.task.tasks);
+
+  // 拉取目标和任务
   useEffect(() => {
-    const updatedMarkedDates = convertTasksToMarkedDates(mockGoals, colors)(value);
-    setMarkedDates(updatedMarkedDates);
-  }, [value, goals]);
+    async function fetchData() {
+      let goalsRes: any = undefined;
+      try {
+        // 如果 reduxGoals 为空，主动拉取 goals 并同步 redux
+        if (!reduxGoals.length) {
+          goalsRes = await getGoals();
+          if (goalsRes && goalsRes.data) {
+            dispatch(setGoals(goalsRes.data));
+          }
+        }
+        const goalsList = reduxGoals.length ? reduxGoals : goalsRes?.data || [];
+        setColors(getGoalColors(goalsList.length));
+        setValue(goalsList.map((g: GoalOut) => g.id));
+        setMarkedDates(
+          convertTasksToMarkedDates(
+            goalsList,
+            reduxTasks,
+            getGoalColors(goalsList.length)
+          )(goalsList.map((g: GoalOut) => g.id))
+        );
+      } catch (e) {
+        Alert.alert("加载失败", String(e));
+      }
+    }
+    fetchData();
+  }, [reduxGoals, reduxTasks]);
+
+  // 目标选择变化时，刷新 markedDates
+  useEffect(() => {
+    if (reduxGoals.length && reduxTasks.length && colors.length) {
+      setMarkedDates(
+        convertTasksToMarkedDates(
+          reduxGoals,
+          reduxTasks,
+          colors
+        )(value)
+      );
+    }
+  }, [value, reduxGoals, reduxTasks, colors]);
 
   const onPressRefreshCalendar = () => {
     const today = new Date();
     setSelectedDate(today);
 
-    const todayString = today.toISOString().split("T")[0]; // 格式化为 YYYY-MM-DD
+    const todayString = today.toISOString().split("T")[0];
     const updatedMarkedDates = {
       ...markedDates,
       [todayString]: {
@@ -281,6 +262,39 @@ const CalendarTab = ({}) => {
     };
 
     setMarkedDates(updatedMarkedDates);
+  };
+
+  const handleAddGoal = async () => {
+    if (!newGoalName.trim()) {
+      Alert.alert("Name is required");
+      return;
+    }
+    setAddingGoal(true);
+    try {
+      await createGoal({
+        name: newGoalName,
+        description: newGoalDesc,
+        achieved: newGoalAchieved,
+        lifePoints: newGoalLifePoints ? Number(newGoalLifePoints) : undefined,
+        priority: newGoalPriority ? Number(newGoalPriority) : undefined,
+      });
+      setAddGoalVisible(false);
+      setNewGoalName("");
+      setNewGoalDesc("");
+      setNewGoalAchieved(false);
+      setNewGoalLifePoints("");
+      setNewGoalPriority("");
+      // Refresh goals
+      const goalsRes = await getGoals();
+      console.log(goalsRes.data);
+      const goalsData: GoalOut[] = goalsRes.data;
+      setColors(getGoalColors(goalsData.length));
+      setValue(goalsData.map((g) => g.id));
+    } catch (e) {
+      Alert.alert("Failed to add goal", String(e));
+    } finally {
+      setAddingGoal(false);
+    }
   };
 
   return (
@@ -296,23 +310,8 @@ const CalendarTab = ({}) => {
         }}
         onDayPress={(day) => {
           const selectedDayString = day.dateString;
-
-          // 更新选中的日期
           setSelectedDate(new Date(selectedDayString));
-
-          // 更新 markedDates
-          const updatedMarkedDates = {
-            ...markedDates,
-            [selectedDayString]: {
-              ...markedDates[selectedDayString],
-              selected: true,
-              selectedColor: "#4a90e2",
-            },
-          };
-
-          setMarkedDates(updatedMarkedDates);
-
-          // 跳转到 day-view 页面
+          // 不再设置 selected/selectedColor，点击后不变色
           router.push(`/day-view/${selectedDayString}`);
         }}
       />
@@ -324,19 +323,74 @@ const CalendarTab = ({}) => {
           open={open}
           value={value}
           itemKey={"id"}
-          items={goals}
+          items={reduxGoals.map((goal: GoalOut) => ({ label: goal.name, value: goal.id, id: goal.id }))}
           setOpen={setOpen}
           setValue={setValue}
-          setItems={setGoals}
-          placeholder={"Choose a task."}
+          setItems={() => {}}
+          placeholder={"Choose a goal."}
           theme="LIGHT"
           mode="BADGE"
           badgeDotColors={colors}
         />
       </View>
+      <View style={{ flexDirection: "row", justifyContent: "flex-end", margin: 8 }}>
+        <Button title="Add Goal" onPress={() => setAddGoalVisible(true)} />
+      </View>
+      <Modal visible={addGoalVisible} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", alignItems: "center" }}>
+          <View style={{ backgroundColor: "#fff", padding: 24, borderRadius: 12, width: 300 }}>
+            <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 12 }}>Add Goal</Text>
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
+              placeholder="Goal Name (e.g. Fitness)"
+              value={newGoalName}
+              onChangeText={setNewGoalName}
+              maxLength={32}
+              autoCapitalize="words"
+            />
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12, minHeight: 40 }}
+              placeholder="Description (e.g. Run 3 times a week)"
+              value={newGoalDesc}
+              onChangeText={setNewGoalDesc}
+              multiline
+              maxLength={100}
+            />
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={{ marginRight: 8 }}>Achieved:</Text>
+              <Button title={newGoalAchieved ? "Yes" : "No"} onPress={() => setNewGoalAchieved(v => !v)} />
+            </View>
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
+              placeholder="Life Points (number, e.g. 10)"
+              value={newGoalLifePoints}
+              onChangeText={v => setNewGoalLifePoints(v.replace(/[^0-9]/g, ''))}
+              keyboardType="numeric"
+              maxLength={6}
+            />
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
+              placeholder="Priority (number, e.g. 1)"
+              value={newGoalPriority}
+              onChangeText={v => setNewGoalPriority(v.replace(/[^0-9]/g, ''))}
+              keyboardType="numeric"
+              maxLength={2}
+            />
+            <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+              <TouchableOpacity onPress={() => setAddGoalVisible(false)} style={{ marginRight: 16 }}>
+                <Text style={{ color: "#888", fontSize: 16 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleAddGoal} disabled={addingGoal}>
+                <Text style={{ color: addingGoal ? "#aaa" : "#007bff", fontSize: 16 }}>{addingGoal ? "Adding..." : "Add"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -347,6 +401,42 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#333",
     marginBottom: 20,
+  },
+  detailPickerTouchable: {
+    borderWidth: 1,
+    borderColor: '#bbb',
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#f8f8f8',
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  detailPickerDropdown: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bbb',
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+    zIndex: 100,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+  },
+  detailPickerOption: {
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
   },
 });
 
