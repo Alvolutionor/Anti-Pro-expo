@@ -30,7 +30,9 @@ import { useSelector, TypedUseSelectorHook } from "react-redux";
 import { RootState } from "../../store/store";
 import { Platform } from "react-native";
 import { scheduleTaskNotification as utilScheduleTaskNotification } from '../../utils/notifications';
-import { getTags } from '../../utils/api';
+import { getTags, createTask, getTasks } from '../../utils/api';
+import { useDispatch } from "react-redux";
+import { setTasks } from "../../store/taskSlice";
 
 const genMockTimeblock = () => {
   return {
@@ -108,16 +110,31 @@ const convertTimeToMinutes = (date) => {
   return date.getHours() * 60 + date.getMinutes();
 };
 
-const parseTaskDates = (tasks) => {
-  return tasks.map((task) => ({
-    ...task,
-    startTime: new Date(task.startTime), // 确保是 Date 对象
-    endTime: new Date(task.endTime), // 确保是 Date 对象
-  }));
+// 统一解析任务的时间字段，兼容字符串/Date/null
+const parseTaskDates = (tasks: any[]) => {
+  return tasks.map((task) => {
+    // 优先 scheduledParam
+    let start = task.scheduledParam?.startTime || task.startTime;
+    let end = task.scheduledParam?.endTime || task.endTime;
+    // 兼容 undefined/null
+    const safeDate = (d: any) => {
+      if (!d) return null;
+      if (d instanceof Date) return d;
+      const dt = new Date(d);
+      return isNaN(dt.getTime()) ? null : dt;
+    };
+    return {
+      ...task,
+      startTime: safeDate(start),
+      endTime: safeDate(end),
+    };
+  });
 };
 
 //
 const ScheduleScreen = ({}) => {
+  const dispatch = useDispatch();
+  const tasks = useSelector((state: RootState) => state.task.tasks);
   const [scheduleData, setScheduleData] = useState(
     parseTaskDates(
       mockTasks.filter((task) => {
@@ -137,7 +154,7 @@ const ScheduleScreen = ({}) => {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [newTaskName, setNewTaskName] = useState("");
-  const [newTaskEvent, setNewTaskEvent] = useState("");
+  const [newTaskTags, setNewTaskTags] = useState<number[]>([]);
   const [newTaskStartTime, setNewTaskStartTime] = useState("");
   const [newTaskEndTime, setNewTaskEndTime] = useState("");
   const [newTaskDescription, setNewTaskDescription] = useState("");
@@ -175,8 +192,8 @@ const ScheduleScreen = ({}) => {
       ...scheduleData,
       {
         ...timeBlock,
-        startTime: new Date(timeBlock.startTime), // 确保是 Date 对象
-        endTime: new Date(timeBlock.endTime), // 确保是 Date 对象
+        startTime: timeBlock.startTime ? new Date(timeBlock.startTime) : null, // 确保是 Date 对象
+        endTime: timeBlock.endTime ? new Date(timeBlock.endTime) : null, // 确保是 Date 对象
         fold: false,
         editNDelete: false,
       },
@@ -220,6 +237,9 @@ const ScheduleScreen = ({}) => {
     return (current - start) / (end - start);
   }
   const renderTimeBlock = ({ item }: { item: any }) => {
+    // 兼容 startTime/endTime 可能为 null
+    const start = item.startTime instanceof Date ? item.startTime : null;
+    const end = item.endTime instanceof Date ? item.endTime : null;
     return (
       <Pressable
         style={[styles.timeBlock, { backgroundColor: "#DEF3FD" }]}
@@ -250,16 +270,20 @@ const ScheduleScreen = ({}) => {
             >
               {/* 显示时间范围 */}
               <Text style={styles.timeText}>
-                {item.startTime.toLocaleTimeString("en-US", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                })} {" "}-{" "}
-                {item.endTime.toLocaleTimeString("en-US", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                })}
+                {start
+                  ? start.toLocaleTimeString("en-US", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                    })
+                  : "--:--"} {" "}-{" "}
+                {end
+                  ? end.toLocaleTimeString("en-US", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                    })
+                  : "--:--"}
               </Text>
 
               {/* 显示任务名称 */}
@@ -303,10 +327,13 @@ const ScheduleScreen = ({}) => {
             left: 0,
             right: 0,
             bottom: 0,
-            width: Math.min(Math.max((new Date() - item.startTime) / (item.endTime - item.startTime) * 100, 0), 100) + "%",
+            width:
+              start && end && end > start
+                ? Math.min(Math.max(((new Date() as any) - start) / (end - start) * Dimensions.get("window").width, 0), Dimensions.get("window").width)
+                : 0,
             backgroundColor: "rgba(0, 0, 0, 0.2)",
             borderRadius: 10,
-            overflow: "hidden"
+            overflow: "hidden",
           }}
         ></View>
       </Pressable>
@@ -347,7 +374,7 @@ const ScheduleScreen = ({}) => {
 
   const resetModalFields = () => {
     setNewTaskName("");
-    setNewTaskEvent("");
+    setNewTaskTags([]);
     setNewTaskStartTime("");
     setNewTaskEndTime("");
     setNewTaskDescription("");
@@ -368,7 +395,39 @@ const ScheduleScreen = ({}) => {
     }).catch(() => {
       setTagList([]); // 失败兜底
     });
-  }, []);
+    // 拉取任务并同步 redux
+    getTasks().then(res => {
+      if (res && res.data) {
+        dispatch(setTasks(res.data));
+      }
+    });
+  }, [dispatch]);
+
+  // scheduleData 由 redux tasks 派生
+  useEffect(() => {
+    if (tasks && Array.isArray(tasks)) {
+      // 只显示今天的任务（如需全部任务可移除 filter）
+      const today = new Date();
+      const todayTasks = tasks.filter((task: any) => {
+        // 兼容 scheduledParam 结构
+        const start = task.scheduledParam?.startTime || task.startTime;
+        if (!start) return false;
+        const d = new Date(start);
+        return (
+          d.getDate() === today.getDate() &&
+          d.getMonth() === today.getMonth() &&
+          d.getFullYear() === today.getFullYear()
+        );
+      });
+      setScheduleData(
+        parseTaskDates(todayTasks).map((item: any) => ({
+          ...item,
+          fold: true,
+          editNDelete: false,
+        }))
+      );
+    }
+  }, [tasks]);
 
   return (
     <View style={styles.screen}>
@@ -486,11 +545,14 @@ const ScheduleScreen = ({}) => {
                             display="spinner"
                             maximumDate={newTaskEndTime && newTaskScheduled !== "periodic" ? new Date(newTaskEndTime) : undefined}
                             onChange={(event, selectedDate) => {
-                              if (selectedDate) {
+                              if (event.type === "set" && selectedDate) {
                                 setNewTaskStartTime(selectedDate.toISOString());
                                 if (newTaskEndTime && new Date(selectedDate) > new Date(newTaskEndTime)) {
                                   setNewTaskEndTime(selectedDate.toISOString());
                                 }
+                                setShowStartTimePicker(false); // 自动关闭并选中
+                              } else if (event.type === "dismissed") {
+                                setShowStartTimePicker(false); // 关闭但不选中
                               }
                             }}
                           />
@@ -586,11 +648,14 @@ const ScheduleScreen = ({}) => {
                                 display="spinner"
                                 maximumDate={newTaskEndTime && newTaskScheduled !== "periodic" ? new Date(newTaskEndTime) : undefined}
                                 onChange={(event, selectedDate) => {
-                                  if (selectedDate) {
+                                  if (event.type === "set" && selectedDate) {
                                     setNewTaskStartTime(selectedDate.toISOString());
                                     if (newTaskEndTime && new Date(selectedDate) > new Date(newTaskEndTime)) {
                                       setNewTaskEndTime(selectedDate.toISOString());
                                     }
+                                    setShowStartTimePicker(false); // 自动关闭并选中
+                                  } else if (event.type === "dismissed") {
+                                    setShowStartTimePicker(false); // 关闭但不选中
                                   }
                                 }}
                               />
@@ -649,7 +714,7 @@ const ScheduleScreen = ({}) => {
                                 }
                                 mode={newTaskScheduled === "periodic" ? "time" : "datetime"}
                                 display="spinner"
-                                minimumDate={newTaskScheduled === "finishedby" ? (newTaskStartTime ? new Date(newTaskStartTime) : undefined) : undefined}
+                                minimumDate={newTaskScheduled === "finishedby" && newTaskStartTime ? new Date(newTaskStartTime) : undefined}
                                 onChange={(event, selectedDate) => {
                                   if (selectedDate) {
                                     setNewTaskEndTime(selectedDate.toISOString());
@@ -898,57 +963,39 @@ const ScheduleScreen = ({}) => {
                             )}
                           </View>
                         </View>
-                        {/* Tag Picker - 自定义下拉菜单，支持 None 选项，数据来自后端 */}
+                        {/* Tag Picker - 支持多选（用 id 存储） */}
                         <View style={styles.dateTimeContainer}>
-                          <Text style={styles.label}>Tag (Optional)</Text>
-                          <View>
+                          <Text style={styles.label}>Tags (Optional)</Text>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                            {tagList.map((tag) => (
+                              <TouchableOpacity
+                                key={tag.id}
+                                style={[
+                                  styles.detailPickerOption,
+                                  newTaskTags.includes(tag.id) && { backgroundColor: "#e6f0ff" },
+                                  { marginRight: 8, marginBottom: 8 },
+                                ]}
+                                onPress={() => {
+                                  if (newTaskTags.includes(tag.id)) {
+                                    setNewTaskTags(newTaskTags.filter((t) => t !== tag.id));
+                                  } else {
+                                    setNewTaskTags([...newTaskTags, tag.id]);
+                                  }
+                                }}
+                              >
+                                <Text style={{ color: newTaskTags.includes(tag.id) ? "#222" : "#888" }}>{tag.name}</Text>
+                              </TouchableOpacity>
+                            ))}
                             <TouchableOpacity
-                              style={styles.detailPickerTouchable}
-                              onPress={() =>
-                                setOpenDropdown(
-                                  openDropdown === "tag" ? null : "tag"
-                                )
-                              }
-                              activeOpacity={0.8}
+                              style={[
+                                styles.detailPickerOption,
+                                newTaskTags.length === 0 && { backgroundColor: "#e6f0ff" },
+                                { marginRight: 8, marginBottom: 8 },
+                              ]}
+                              onPress={() => setNewTaskTags([])}
                             >
-                              <Text style={{ color: newTaskEvent ? "#222" : "#888" }}>
-                                {tagList.find(t => t.name === newTaskEvent)?.name || "None"}
-                              </Text>
-                              <AntDesign name="down" size={16} color="#555" />
+                              <Text style={{ color: newTaskTags.length === 0 ? "#222" : "#888" }}>None</Text>
                             </TouchableOpacity>
-                            {openDropdown === "tag" && (
-                              <View style={styles.detailPickerDropdown}>
-                                <TouchableOpacity
-                                  style={[
-                                    styles.detailPickerOption,
-                                    !newTaskEvent && { backgroundColor: "#e6f0ff" },
-                                  ]}
-                                  onPress={() => {
-                                    setNewTaskEvent("");
-                                    setOpenDropdown(null);
-                                  }}
-                                >
-                                  <Text style={{ color: "#222" }}>None</Text>
-                                </TouchableOpacity>
-                                {tagList.map((tag) => (
-                                  <TouchableOpacity
-                                    key={tag.id}
-                                    style={[
-                                      styles.detailPickerOption,
-                                      newTaskEvent === tag.name && {
-                                        backgroundColor: "#e6f0ff",
-                                      },
-                                    ]}
-                                    onPress={() => {
-                                      setNewTaskEvent(tag.name);
-                                      setOpenDropdown(null);
-                                    }}
-                                  >
-                                    <Text style={{ color: "#222" }}>{tag.name}</Text>
-                                  </TouchableOpacity>
-                                ))}
-                              </View>
-                            )}
                           </View>
                         </View>
                         {/* Details Section */}
@@ -1085,27 +1132,38 @@ const ScheduleScreen = ({}) => {
                                 23,
                                 59
                               );
-                          const newTask = {
-                            id: scheduleData.length + 1,
-                            goal: 1,
+                          // 组装 details，过滤无 key 的项
+                          const detailsObj = details.reduce((acc: Record<string, any>, detail) => {
+                            if (detail.key) acc[detail.key] = detail.value;
+                            return acc;
+                          }, {});
+                          // 组装后端任务数据
+                          const taskData = {
                             name: newTaskName,
-                            startTime: startTime.toISOString(),
-                            endTime: endTime.toISOString(),
-                            tag: mockEventTags.includes(newTaskEvent)
-                              ? newTaskEvent
-                              : "Untagged",
-                            details: details.reduce((acc: Record<string, any>, detail) => {
-                              acc[detail.key] = detail.value;
-                              return acc;
-                            }, {}),
-                            goalId: selectedGoalId ?? 0,
-                            completed: null,
+                            tags: newTaskTags,
+                            goalId: selectedGoalId ?? undefined,
+                            details: detailsObj,
                             scheduled: newTaskScheduled,
-                            scheduledParam: newTaskScheduled === "periodic" ? newTaskScheduledParam : {},
+                            scheduledParam: {
+                              ...newTaskScheduledParam,
+                              startTime: startTime.toISOString(),
+                              endTime: endTime.toISOString(),
+                            },
                           };
-                          addToScheduleData(newTask);
-                          resetModalFields();
-                          setModalVisible(false);
+                          createTask(taskData)
+                            .then(() => getTasks())
+                            .then(res => {
+                              if (res && res.data) {
+                                dispatch(setTasks(res.data));
+                              }
+                              // 可选：刷新本地 scheduleData
+                              // setScheduleData(res.data); // 若后端返回格式一致
+                            })
+                            .catch(e => Alert.alert("Add Task Failed", String(e)))
+                            .finally(() => {
+                              resetModalFields();
+                              setModalVisible(false);
+                            });
                         }}
                       >
                         <Text style={styles.buttonText}>Add Task</Text>
@@ -1578,21 +1636,29 @@ const styles = StyleSheet.create({
     marginLeft: 7,
     letterSpacing: 0.5,
   },
+  taskNameText: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#333",
+    marginLeft: 8,
+  },
 });
 
 // 顶部添加类型定义
 interface ScheduleTask {
   id: number;
-  goal: number;
+  goal?: number;
   name: string;
-  startTime: string;
-  endTime: string;
-  tag: string;
+  startTime: Date | null;
+  endTime: Date | null;
+  tags?: number[];
   details: Record<string, any>;
-  goalId: number;
+  goalId?: number;
   completed: boolean | null;
-  scheduled: string;
-  scheduledParam: any;
+  scheduled?: string;
+  scheduledParam?: any;
+  fold?: boolean;
+  editNDelete?: boolean;
 }
 
 // 占位：任务提醒/推送函数，防止未定义报错

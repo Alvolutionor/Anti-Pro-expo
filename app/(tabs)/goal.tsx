@@ -133,7 +133,7 @@ export default function GoalsManager() {
   const [addTaskModalVisible, setAddTaskModalVisible] = useState(false);
   const [addingTaskGoalId, setAddingTaskGoalId] = useState<number | null>(null);
   const [newTaskName, setNewTaskName] = useState("");
-  const [newTaskEvent, setNewTaskEvent] = useState("");
+  const [newTaskTags, setNewTaskTags] = useState<number[]>([]); // 多选tag id
   const [newTaskStartTime, setNewTaskStartTime] = useState("");
   const [newTaskEndTime, setNewTaskEndTime] = useState("");
   const [details, setDetails] = useState([{ key: "desc", value: "" }]);
@@ -170,10 +170,9 @@ export default function GoalsManager() {
     try {
       const data = {
         name: newTaskName,
-        startTime: newTaskStartTime,
-        endTime: newTaskEndTime,
+        tags: newTaskTags,
+        goalId: addingTaskGoalId,
         details: details.reduce((acc: Record<string, any>, detail) => {
-          // desc 必须有，且 key 为空时自动用 desc
           if (!detail.key) {
             acc['desc'] = detail.value;
           } else {
@@ -181,8 +180,6 @@ export default function GoalsManager() {
           }
           return acc;
         }, {}),
-        tag: newTaskEvent,
-        goalId: addingTaskGoalId,
         scheduled: newTaskScheduled,
         scheduledParam: newTaskScheduled === "periodic" ? newTaskScheduledParam : {},
       };
@@ -192,7 +189,7 @@ export default function GoalsManager() {
       dispatch(setTasks(tasksRes.data));
       setAddTaskModalVisible(false);
       setNewTaskName("");
-      setNewTaskEvent("");
+      setNewTaskTags([]);
       setNewTaskStartTime("");
       setNewTaskEndTime("");
       setDetails([{ key: "desc", value: "" }]);
@@ -255,23 +252,53 @@ export default function GoalsManager() {
               <View style={styles.taskTreeBox}>
                 <View style={styles.taskTreeLine} />
                 <View style={{ flex: 1 }}>
-                  {goalTasks.map((task: TaskOut) => (
-                    <View key={task.id} style={styles.taskCardTree}>
-                      <Text style={styles.taskTitle}>{task.name}</Text>
-                      <Text style={styles.taskField}>Start: {task.startTime}</Text>
-                      <Text style={styles.taskField}>End: {task.endTime}</Text>
-                      {task.completed !== undefined && (
-                        <Text style={styles.taskField}>
-                          Completed: {task.completed ? "Yes" : "No"}
-                        </Text>
-                      )}
-                      {task.priority !== undefined && (
-                        <Text style={styles.taskField}>
-                          Priority: {task.priority}
-                        </Text>
-                      )}
-                    </View>
-                  ))}
+                  {goalTasks.map((task: TaskOut) => {
+                    // 只从 scheduledParam 解析 startTime/endTime
+                    let startTime = task.scheduledParam?.startTime;
+                    let endTime = task.scheduledParam?.endTime;
+                    return (
+                      <View key={task.id} style={styles.taskCardTree}>
+                        <Text style={styles.taskTitle}>{task.name}</Text>
+                        <Text style={styles.taskField}>Start: {startTime ? new Date(startTime).toLocaleString() : '-'}</Text>
+                        <Text style={styles.taskField}>End: {endTime ? new Date(endTime).toLocaleString() : '-'}</Text>
+                        {task.completed !== undefined && (
+                          <Text style={styles.taskField}>
+                            Completed: {task.completed ? "Yes" : "No"}
+                          </Text>
+                        )}
+                        {task.priority !== undefined && (
+                          <Text style={styles.taskField}>
+                            Priority: {task.priority}
+                          </Text>
+                        )}
+                        {/* 任务卡片展示标签名 */}
+                        {Array.isArray(task.tags) && task.tags.length > 0 && (
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+                            {task.tags.map((tid: any) => {
+                              const tagId = typeof tid === 'number' ? tid : Number(tid);
+                              const tag = tagList.find(t => t.id === tagId);
+                              return tag ? (
+                                <View key={tagId} style={{ backgroundColor: tag.color || '#007bff', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, marginRight: 6, marginBottom: 2 }}>
+                                  <Text style={{ color: '#fff', fontSize: 12 }}>{tag.name}</Text>
+                                </View>
+                              ) : null;
+                            })}
+                          </View>
+                        )}
+                        {/* AddTagToTaskButton 区域 */}
+                        <TouchableOpacity
+                          style={{ marginTop: 6, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center' }}
+                          onPress={() => {
+                            // TODO: 打开标签多选弹窗，调用 updateTask 只更新 tags 字段
+                            Alert.alert('Add Tag', '标签添加功能开发中，可在 AddTaskModal 选择标签');
+                          }}
+                        >
+                          <AntDesign name="tags" size={16} color="#007bff" style={{ marginRight: 4 }} />
+                          <Text style={{ color: '#007bff', fontSize: 13 }}>添加标签</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
                 </View>
               </View>
             )}
@@ -437,6 +464,7 @@ export default function GoalsManager() {
 
     const handleClose = () => {
       setNewTaskName("");
+      setNewTaskTags([]); // 重置标签
       setNewTaskEvent("");
       setNewTaskStartTime("");
       setNewTaskEndTime("");
@@ -648,6 +676,30 @@ export default function GoalsManager() {
                     <TouchableOpacity style={styles.addDetailButton} onPress={handleAddDetail}>
                       <Text style={styles.addDetailButtonText}>+ Add Detail</Text>
                     </TouchableOpacity>
+                  </View>
+                  {/* 标签多选UI */}
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={styles.goalField}>Tags</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                      {tagList.map(tag => (
+                        <TouchableOpacity
+                          key={tag.id}
+                          style={{
+                            backgroundColor: newTaskTags.includes(tag.id) ? (tag.color || '#007bff') : '#eee',
+                            borderRadius: 16,
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            marginRight: 8,
+                            marginBottom: 8,
+                          }}
+                          onPress={() => {
+                            setNewTaskTags(tags => tags.includes(tag.id) ? tags.filter(t => t !== tag.id) : [...tags, tag.id]);
+                          }}
+                        >
+                          <Text style={{ color: newTaskTags.includes(tag.id) ? '#fff' : '#333' }}>{tag.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                   </View>
                   {/* 其他表单项复用 index.tsx 逻辑 */}
                   <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
@@ -1065,5 +1117,73 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  dateTimeContainer: {
+    marginBottom: 12,
+  },
+  label: {
+    fontSize: 14,
+    color: "#333",
+    marginBottom: 8,
+  },
+  // AddTagToTaskButton 组件样式
+  tagButton: {
+    backgroundColor: "#007bff",
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  tagButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    marginLeft: 4,
+  },
+  tagPickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  tagPickerContent: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 24,
+    width: "90%",
+    maxWidth: 400,
+    elevation: 4,
+  },
+  tagPickerTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  tagOption: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  tagOptionText: {
+    fontSize: 16,
+    color: "#333",
+  },
+  tagSelected: {
+    backgroundColor: "#e6f0ff",
+  },
+  tagPickerActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 16,
+  },
+  tagPickerCancel: {
+    marginRight: 16,
+  },
+  tagPickerSave: {
+    color: "#007bff",
+    fontSize: 16,
   },
 });

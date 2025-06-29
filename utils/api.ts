@@ -1,8 +1,8 @@
 import axios from "axios";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE = "http://3.26.35.148:8080";
-// const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
+// const API_BASE = "http://3.26.35.148:8080";
+const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
 
 // 获取token的辅助函数（React Native 环境用 AsyncStorage）
 async function getToken() {
@@ -58,26 +58,44 @@ export interface GoalOut extends CreateGoalData {
 
 export interface CreateTaskData {
   name: string;
-  description?: string;
-  startTime?: string;
-  endTime?: string;
   completed?: boolean;
   dayPoints?: number;
   priority?: number;
   belongTo?: number;
   scheduled?: string;
-  scheduledParam?: string;
+  scheduledParam?: {
+    startTime?: string;
+    endTime?: string;
+    [key: string]: any;
+  };
+  goalId?: number;
+  tag?: string;
+  details?: Record<string, any>;
 }
 
 export interface TaskOut extends CreateTaskData {
   id: number;
-  goalId?: number;
   userId: number;
+  name: string;
+  goalId?: number;
   parentTaskId?: number;
   order?: number;
   date?: string; // ISO字符串
+  completed?: boolean;
+  dayPoints?: number;
+  priority?: number;
+  belongTo?: number;
   createdAt: string;
   updatedAt: string;
+  scheduled?: string;
+  scheduledParam?: {
+    startTime?: string;
+    endTime?: string;
+    [key: string]: any;
+  };
+  tags?: number[]; // 修正为 id 数组
+  details?: Record<string, any>;
+
 }
 
 export interface CreateTagData {
@@ -228,14 +246,20 @@ export interface TaskOut {
   parentTaskId?: number;
   order?: number;
   date?: string; // ISO字符串
-  startTime: string;
-  endTime: string;
   completed?: boolean;
   dayPoints?: number;
   priority?: number;
   belongTo?: number;
   createdAt: string;
   updatedAt: string;
+  scheduled?: string;
+  scheduledParam?: {
+    startTime?: string;
+    endTime?: string;
+    [key: string]: any;
+  };
+  tag?: string;
+  details?: Record<string, any>;
 }
 
 export default api;
