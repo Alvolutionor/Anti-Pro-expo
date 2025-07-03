@@ -14,6 +14,7 @@ import {
   Keyboard,
   TouchableWithoutFeedback,
 } from "react-native";
+import { SwipeListView } from 'react-native-swipe-list-view';
 import { useDispatch, useSelector } from "react-redux";
 import { RootState, AppDispatch } from "../../store/store";
 import {
@@ -26,6 +27,7 @@ import {
   TaskOut,
   CreateGoalData,
   createTask,
+  deleteTask,
 } from "../../utils/api";
 import {
   setGoals,
@@ -144,6 +146,7 @@ export default function GoalsManager() {
   const [newTaskScheduledParam, setNewTaskScheduledParam] = useState<any>({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
   const [tagList, setTagList] = useState<{ id: number; name: string; color?: string }[]>([]);
   const [savingTask, setSavingTask] = useState(false);
+  const [taskFoldMap, setTaskFoldMap] = useState<{ [id: number]: boolean }>({});
 
   // 拉取 tag 列表
   useEffect(() => {
@@ -181,7 +184,11 @@ export default function GoalsManager() {
           return acc;
         }, {}),
         scheduled: newTaskScheduled,
-        scheduledParam: newTaskScheduled === "periodic" ? newTaskScheduledParam : {},
+        scheduledParam: {
+          ...newTaskScheduledParam,
+          startTime: newTaskStartTime || undefined,
+          endTime: newTaskEndTime || undefined,
+        },
       };
       await createTask(data);
       // 刷新 tasks
@@ -201,6 +208,16 @@ export default function GoalsManager() {
       Alert.alert("Failed to add task", String(e));
     } finally {
       setSavingTask(false);
+    }
+  };
+    // renderGoal 任务卡片加 fold/展开按钮
+  const handleDeleteTask = async (taskId: number) => {
+    try {
+      await deleteTask(taskId);
+      const tasksRes = await getTasks();
+      dispatch(setTasks(tasksRes.data));
+    } catch (e) {
+      Alert.alert('Failed to delete task', String(e));
     }
   };
 
@@ -251,55 +268,82 @@ export default function GoalsManager() {
             ) : (
               <View style={styles.taskTreeBox}>
                 <View style={styles.taskTreeLine} />
-                <View style={{ flex: 1 }}>
-                  {goalTasks.map((task: TaskOut) => {
-                    // 只从 scheduledParam 解析 startTime/endTime
+                <SwipeListView
+                  data={goalTasks}
+                  keyExtractor={(task) => task.id.toString()}
+                  renderItem={({ item: task }) => {
                     let startTime = task.scheduledParam?.startTime;
                     let endTime = task.scheduledParam?.endTime;
+                    const folded = !!taskFoldMap[task.id];
                     return (
                       <View key={task.id} style={styles.taskCardTree}>
-                        <Text style={styles.taskTitle}>{task.name}</Text>
-                        <Text style={styles.taskField}>Start: {startTime ? new Date(startTime).toLocaleString() : '-'}</Text>
-                        <Text style={styles.taskField}>End: {endTime ? new Date(endTime).toLocaleString() : '-'}</Text>
-                        {task.completed !== undefined && (
-                          <Text style={styles.taskField}>
-                            Completed: {task.completed ? "Yes" : "No"}
-                          </Text>
-                        )}
-                        {task.priority !== undefined && (
-                          <Text style={styles.taskField}>
-                            Priority: {task.priority}
-                          </Text>
-                        )}
-                        {/* 任务卡片展示标签名 */}
-                        {Array.isArray(task.tags) && task.tags.length > 0 && (
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
-                            {task.tags.map((tid: any) => {
-                              const tagId = typeof tid === 'number' ? tid : Number(tid);
-                              const tag = tagList.find(t => t.id === tagId);
-                              return tag ? (
-                                <View key={tagId} style={{ backgroundColor: tag.color || '#007bff', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, marginRight: 6, marginBottom: 2 }}>
-                                  <Text style={{ color: '#fff', fontSize: 12 }}>{tag.name}</Text>
-                                </View>
-                              ) : null;
-                            })}
-                          </View>
-                        )}
-                        {/* AddTagToTaskButton 区域 */}
                         <TouchableOpacity
-                          style={{ marginTop: 6, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center' }}
-                          onPress={() => {
-                            // TODO: 打开标签多选弹窗，调用 updateTask 只更新 tags 字段
-                            Alert.alert('Add Tag', '标签添加功能开发中，可在 AddTaskModal 选择标签');
-                          }}
+                          onPress={() => setTaskFoldMap(m => ({ ...m, [task.id]: !m[task.id] }))}
+                          style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}
                         >
-                          <AntDesign name="tags" size={16} color="#007bff" style={{ marginRight: 4 }} />
-                          <Text style={{ color: '#007bff', fontSize: 13 }}>添加标签</Text>
+                          <AntDesign name={folded ? 'right' : 'down'} size={14} color="#007bff" style={{ marginRight: 4 }} />
+                          <Text style={styles.taskTitle}>{task.name}</Text>
                         </TouchableOpacity>
+                        {!folded && (
+                          <>
+                            <Text style={styles.taskField}>Start: {startTime ? new Date(startTime).toLocaleString() : '-'}</Text>
+                            <Text style={styles.taskField}>End: {endTime ? new Date(endTime).toLocaleString() : '-'}</Text>
+                            {task.completed !== undefined && (
+                              <Text style={styles.taskField}>
+                                Completed: {task.completed ? "Yes" : "No"}
+                              </Text>
+                            )}
+                            {task.priority !== undefined && (
+                              <Text style={styles.taskField}>
+                                Priority: {task.priority}
+                              </Text>
+                            )}
+                            {/* 任务卡片展示标签名 */}
+                            {Array.isArray(task.tags) && task.tags.length > 0 && (
+                              <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+                                {task.tags.map((tid: any) => {
+                                  const tagId = typeof tid === 'number' ? tid : Number(tid);
+                                  const tag = tagList.find(t => t.id === tagId);
+                                  return tag ? (
+                                    <View key={tagId} style={{ backgroundColor: tag.color || '#007bff', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, marginRight: 6, marginBottom: 2 }}>
+                                      <Text style={{ color: '#fff', fontSize: 12 }}>{tag.name}</Text>
+                                    </View>
+                                  ) : null;
+                                })}
+                              </View>
+                            )}
+                            {/* AddTagToTaskButton 区域 */}
+                            <TouchableOpacity
+                              style={{ marginTop: 6, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center' }}
+                              onPress={() => {
+                                // TODO: 打开标签多选弹窗，调用 updateTask 只更新 tags 字段
+                                Alert.alert('Add Tag', '标签添加功能开发中，可在 AddTaskModal 选择标签');
+                              }}
+                            >
+                              <AntDesign name="tags" size={16} color="#007bff" style={{ marginRight: 4 }} />
+                              <Text style={{ color: '#007bff', fontSize: 13 }}>添加标签</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
                       </View>
                     );
-                  })}
-                </View>
+                  }}
+                  renderHiddenItem={({ item: task }) => (
+                    <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', height: '100%' }}>
+                      <TouchableOpacity
+                        style={{ backgroundColor: '#d33', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10, marginRight: 12 }}
+                        onPress={() => handleDeleteTask(task.id)}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  rightOpenValue={-90}
+                  disableRightSwipe
+                  showsVerticalScrollIndicator={false}
+                  style={{ backgroundColor: 'transparent' }}
+                  contentContainerStyle={{ paddingBottom: 0 }}
+                />
               </View>
             )}
             {/* Add Task 按钮 */}
@@ -334,9 +378,6 @@ export default function GoalsManager() {
   const [newGoalAchieved, setNewGoalAchieved] = useState(false);
   const [newGoalLifePoints, setNewGoalLifePoints] = useState("");
   const [newGoalPriority, setNewGoalPriority] = useState("");
-  const [openScheduled, setOpenScheduled] = useState(false);
-  const [openFreq, setOpenFreq] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [addingGoal, setAddingGoal] = useState(false);
 
   // Add Goal 逻辑
@@ -363,9 +404,6 @@ export default function GoalsManager() {
       setNewGoalAchieved(false);
       setNewGoalLifePoints("");
       setNewGoalPriority("");
-      setOpenScheduled(false);
-      setOpenFreq(false);
-      setShowDatePicker(false);
     } catch (e) {
       Alert.alert("Failed to add goal", String(e));
     } finally {
@@ -433,10 +471,9 @@ export default function GoalsManager() {
       try {
         const data = {
           name: newTaskName,
-          startTime: newTaskStartTime,
-          endTime: newTaskEndTime,
+          tags: newTaskTags,
+          goalId: goalId,
           details: details.reduce((acc: Record<string, any>, detail) => {
-            // desc 必须有，且 key 为空时自动用 desc
             if (!detail.key) {
               acc['desc'] = detail.value;
             } else {
@@ -444,12 +481,13 @@ export default function GoalsManager() {
             }
             return acc;
           }, {}),
-          tag: newTaskEvent,
-          goalId: goalId,
           scheduled: newTaskScheduled,
-          scheduledParam: newTaskScheduled === "periodic" ? newTaskScheduledParam : {},
+          scheduledParam: {
+            ...newTaskScheduledParam,
+            startTime: newTaskStartTime || undefined,
+            endTime: newTaskEndTime || undefined,
+          },
         };
-        // 不传 description 字段，避免后端报错
         await createTask(data);
         const tasksRes = await getTasks();
         dispatch(setTasks(tasksRes.data));
@@ -567,12 +605,30 @@ export default function GoalsManager() {
                       </TouchableOpacity>
                       {showEndTimePicker && (
                         <DateTimePicker
-                          value={newTaskEndTime ? new Date(newTaskEndTime) : new Date()}
+                          value={newTaskEndTime ? new Date(newTaskEndTime) : (newTaskStartTime ? new Date(newTaskStartTime) : new Date())}
                           mode="datetime"
                           display="default"
+                          minimumDate={newTaskStartTime ? new Date(newTaskStartTime) : undefined}
+                          maximumDate={(() => {
+                            if (newTaskStartTime) {
+                              const start = new Date(newTaskStartTime);
+                              const max = new Date(start);
+                              max.setHours(23, 59, 59, 999);
+                              return max;
+                            }
+                            return undefined;
+                          })()}
                           onChange={(event, date) => {
                             setShowEndTimePicker(false);
-                            if (date) setNewTaskEndTime(date.toISOString());
+                            if (date && newTaskStartTime) {
+                              // 强制 endTime 日期与 startTime 相同
+                              const start = new Date(newTaskStartTime);
+                              const end = new Date(date);
+                              end.setFullYear(start.getFullYear(), start.getMonth(), start.getDate());
+                              setNewTaskEndTime(end.toISOString());
+                            } else if (date) {
+                              setNewTaskEndTime(date.toISOString());
+                            }
                           }}
                         />
                       )}
@@ -787,6 +843,7 @@ export default function GoalsManager() {
                   keyboardType="numeric"
                   maxLength={2}
                 />
+                {/* 目标不应有时间相关表单项，已移除 scheduled、start/end time 相关UI */}
                 <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
                   <TouchableOpacity onPress={() => setAddGoalVisible(false)} style={{ marginRight: 16 }}>
                     <Text style={{ color: "#888", fontSize: 16 }}>Cancel</Text>

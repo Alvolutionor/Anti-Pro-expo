@@ -30,7 +30,7 @@ import { useSelector, TypedUseSelectorHook } from "react-redux";
 import { RootState } from "../../store/store";
 import { Platform } from "react-native";
 import { scheduleTaskNotification as utilScheduleTaskNotification } from '../../utils/notifications';
-import { getTags, createTask, getTasks } from '../../utils/api';
+import { getTags, createTask, getTasks, updateTask } from '../../utils/api';
 import { useDispatch } from "react-redux";
 import { setTasks } from "../../store/taskSlice";
 
@@ -246,9 +246,7 @@ const ScheduleScreen = ({}) => {
         onPress={() => {
           changeScheduleData(item.id, "fold", !item.fold);
         }}
-        onLongPress={() => {
-          changeScheduleData(item.id, "editNDelete", !item.editNDelete);
-        }}
+        onLongPress={() => handleEditTask(item)}
       >
         <View style={{ borderRadius: 10 }}>
           <View
@@ -386,7 +384,7 @@ const ScheduleScreen = ({}) => {
     setShowDatePicker(false);
   };
 
-  // 拉取 tag 列表
+  // 拉取 tag 列表和今日任务
   useEffect(() => {
     getTags().then(res => {
       if (res && res.data) {
@@ -395,7 +393,8 @@ const ScheduleScreen = ({}) => {
     }).catch(() => {
       setTagList([]); // 失败兜底
     });
-    // 拉取任务并同步 redux
+    // 拉取今天的任务并同步 redux
+    // getTasks({ date: todayStr }) 改为 getTasks()，如需后端支持请实现 query
     getTasks().then(res => {
       if (res && res.data) {
         dispatch(setTasks(res.data));
@@ -406,19 +405,24 @@ const ScheduleScreen = ({}) => {
   // scheduleData 由 redux tasks 派生
   useEffect(() => {
     if (tasks && Array.isArray(tasks)) {
-      // 只显示今天的任务（如需全部任务可移除 filter）
+      // debug: 打印所有任务的 startTime
+      console.log('所有tasks:', tasks.map(t => ({id: t.id, startTime: t.scheduledParam?.startTime || t.startTime, raw: t})));
       const today = new Date();
+      const todayYear = today.getFullYear();
+      const todayMonth = today.getMonth();
+      const todayDate = today.getDate();
       const todayTasks = tasks.filter((task: any) => {
-        // 兼容 scheduledParam 结构
         const start = task.scheduledParam?.startTime || task.startTime;
         if (!start) return false;
         const d = new Date(start);
         return (
-          d.getDate() === today.getDate() &&
-          d.getMonth() === today.getMonth() &&
-          d.getFullYear() === today.getFullYear()
+          d.getFullYear() === todayYear &&
+          d.getMonth() === todayMonth &&
+          d.getDate() === todayDate
         );
       });
+      // debug: 打印筛选后的当天任务
+      console.log('筛选后todayTasks:', todayTasks.map(t => ({id: t.id, startTime: t.scheduledParam?.startTime || t.startTime})));
       setScheduleData(
         parseTaskDates(todayTasks).map((item: any) => ({
           ...item,
@@ -429,11 +433,47 @@ const ScheduleScreen = ({}) => {
     }
   }, [tasks]);
 
+  const handleTaskStatusChange = (id: number, completed: boolean | null) => {
+    // 只 patch 状态
+    updateTask(id, { completed })
+      .then(() => getTasks())
+      .then(res => {
+        if (res && res.data) {
+          dispatch(setTasks(res.data));
+        }
+      });
+  };
+
+  const now = new Date();
+  // 修正：completed 只用 boolean
+  const todoTasks = scheduleData.filter((item: any) => item.completed === false && item.endTime && item.endTime > now);
+  const notDoneTasks = scheduleData.filter((item: any) => item.completed === false && item.endTime && item.endTime <= now);
+  const completedTasks = scheduleData.filter((item: any) => item.completed === true);
+
+  // 编辑任务时填充表单
+  const handleEditTask = (task: ScheduleTask) => {
+    setEditingTask(task);
+    setNewTaskName(task.name);
+    setNewTaskTags(task.tags || []);
+    setNewTaskStartTime(task.startTime ? task.startTime.toISOString() : "");
+    setNewTaskEndTime(task.endTime ? task.endTime.toISOString() : "");
+    setNewTaskDescription(task.details?.desc || task.details?.description || "");
+    setDetails(Object.entries(task.details || {}).map(([key, value]) => ({ key, value })));
+    setSelectedGoalId(task.goalId);
+    setNewTaskScheduled(task.scheduled || "onetime");
+    setNewTaskScheduledParam(task.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+    setShowMoreFields(true);
+    setModalVisible(true);
+  };
+
+  // 新增 editingTask 状态
+  const [editingTask, setEditingTask] = useState<ScheduleTask | null>(null);
+
   return (
     <View style={styles.screen}>
       <View>
         <View style={{ flexDirection: "row", width: "100%" }}>
-          <Text style={styles.screenTitle}>今日日程</Text>
+          <Text style={styles.screenTitle}>Agenda</Text>
         </View>
         <Modal
           animationType="slide"
@@ -714,7 +754,7 @@ const ScheduleScreen = ({}) => {
                                 }
                                 mode={newTaskScheduled === "periodic" ? "time" : "datetime"}
                                 display="spinner"
-                                minimumDate={newTaskScheduled === "finishedby" && newTaskStartTime ? new Date(newTaskStartTime) : undefined}
+                                minimumDate={endTimeMinimumDate}
                                 onChange={(event, selectedDate) => {
                                   if (selectedDate) {
                                     setNewTaskEndTime(selectedDate.toISOString());
@@ -755,14 +795,32 @@ const ScheduleScreen = ({}) => {
                                 value={
                                   newTaskEndTime
                                     ? new Date(newTaskEndTime)
-                                    : new Date()
+                                    : (newTaskStartTime ? new Date(newTaskStartTime) : new Date())
                                 }
                                 mode="datetime"
                                 display="spinner"
                                 minimumDate={newTaskStartTime ? new Date(newTaskStartTime) : undefined}
+                                maximumDate={(() => {
+                                  if (newTaskScheduled === "onetime" && newTaskStartTime) {
+                                    // 限制只能选同一天
+                                    const start = new Date(newTaskStartTime);
+                                    const max = new Date(start);
+                                    max.setHours(23, 59, 59, 999);
+                                    return max;
+                                  }
+                                  return undefined;
+                                })()}
                                 onChange={(event, selectedDate) => {
                                   if (selectedDate) {
-                                    setNewTaskEndTime(selectedDate.toISOString());
+                                    // onetime 模式下，强制 endTime 日期与 startTime 相同
+                                    if (newTaskScheduled === "onetime" && newTaskStartTime) {
+                                      const start = new Date(newTaskStartTime);
+                                      const end = new Date(selectedDate);
+                                      end.setFullYear(start.getFullYear(), start.getMonth(), start.getDate());
+                                      setNewTaskEndTime(end.toISOString());
+                                    } else {
+                                      setNewTaskEndTime(selectedDate.toISOString());
+                                    }
                                   }
                                 }}
                               />
@@ -1108,66 +1166,107 @@ const ScheduleScreen = ({}) => {
 
                     {/* Add Task Button */}
                     <View style={styles.buttonRow}>
-                      <Pressable
-                        style={[
-                          styles.button,
-                          styles.addButton,
-                          { flex: 1, marginRight: 8 },
-                        ]}
-                        onPress={() => {
-                          if (!newTaskName.trim()) {
-                            Alert.alert("Error", "Task name cannot be empty.");
-                            return;
-                          }
-                          // startTime 可选，未选时用当前时间
-                          const startTime = newTaskStartTime
-                            ? new Date(newTaskStartTime)
-                            : new Date();
-                          const endTime = newTaskEndTime
-                            ? new Date(newTaskEndTime)
-                            : new Date(
-                                startTime.getFullYear(),
-                                startTime.getMonth(),
-                                startTime.getDate(),
-                                23,
-                                59
-                              );
-                          // 组装 details，过滤无 key 的项
-                          const detailsObj = details.reduce((acc: Record<string, any>, detail) => {
-                            if (detail.key) acc[detail.key] = detail.value;
-                            return acc;
-                          }, {});
-                          // 组装后端任务数据
-                          const taskData = {
-                            name: newTaskName,
-                            tags: newTaskTags,
-                            goalId: selectedGoalId ?? undefined,
-                            details: detailsObj,
-                            scheduled: newTaskScheduled,
-                            scheduledParam: {
-                              ...newTaskScheduledParam,
-                              startTime: startTime.toISOString(),
-                              endTime: endTime.toISOString(),
-                            },
-                          };
-                          createTask(taskData)
-                            .then(() => getTasks())
-                            .then(res => {
-                              if (res && res.data) {
-                                dispatch(setTasks(res.data));
-                              }
-                              // 可选：刷新本地 scheduleData
-                              // setScheduleData(res.data); // 若后端返回格式一致
+                      {editingTask ? (
+                        <Pressable
+                          style={[styles.button, styles.addButton, { flex: 1, marginRight: 8 }]}
+                          onPress={() => {
+                            if (!newTaskName.trim()) {
+                              Alert.alert("Error", "Task name cannot be empty.");
+                              return;
+                            }
+                            const startTime = newTaskStartTime ? new Date(newTaskStartTime) : new Date();
+                            const endTime = newTaskEndTime ? new Date(newTaskEndTime) : new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate(), 23, 59);
+                            const detailsObj = details.reduce((acc: Record<string, any>, detail) => {
+                              if (detail.key) acc[detail.key] = detail.value;
+                              return acc;
+                            }, {});
+                            // 编辑：调用 updateTask
+                            updateTask(editingTask.id, {
+                              name: newTaskName,
+                              tags: newTaskTags,
+                              goalId: selectedGoalId ?? undefined,
+                              details: detailsObj,
+                              scheduled: newTaskScheduled,
+                              scheduledParam: {
+                                ...newTaskScheduledParam,
+                                startTime: startTime.toISOString(),
+                                endTime: endTime.toISOString(),
+                              },
                             })
-                            .catch(e => Alert.alert("Add Task Failed", String(e)))
-                            .finally(() => {
-                              resetModalFields();
-                              setModalVisible(false);
-                            });
-                        }}
-                      >
-                        <Text style={styles.buttonText}>Add Task</Text>
-                      </Pressable>
+                              .then(() => getTasks())
+                              .then(res => {
+                                if (res && res.data) {
+                                  dispatch(setTasks(res.data));
+                                }
+                              })
+                              .catch(e => Alert.alert("Edit Task Failed", String(e)))
+                              .finally(() => {
+                                resetModalFields();
+                                setEditingTask(null);
+                                setModalVisible(false);
+                              });
+                          }}
+                        >
+                          <Text style={styles.buttonText}>Save</Text>
+                        </Pressable>
+                      ) : (
+                        <Pressable
+                          style={[styles.button, styles.addButton, { flex: 1, marginRight: 8 }]}
+                          onPress={() => {
+                            if (!newTaskName.trim()) {
+                              Alert.alert("Error", "Task name cannot be empty.");
+                              return;
+                            }
+                            // startTime 可选，未选时用当前时间
+                            const startTime = newTaskStartTime
+                              ? new Date(newTaskStartTime)
+                              : new Date();
+                            const endTime = newTaskEndTime
+                              ? new Date(newTaskEndTime)
+                              : new Date(
+                                  startTime.getFullYear(),
+                                  startTime.getMonth(),
+                                  startTime.getDate(),
+                                  23,
+                                  59
+                                );
+                            // 组装 details，过滤无 key 的项
+                            const detailsObj = details.reduce((acc: Record<string, any>, detail) => {
+                              if (detail.key) acc[detail.key] = detail.value;
+                              return acc;
+                            }, {});
+                            // 组装后端任务数据
+                            const taskData = {
+                              name: newTaskName,
+                              tags: newTaskTags,
+                              goalId: selectedGoalId ?? undefined,
+                              details: detailsObj,
+                              scheduled: newTaskScheduled,
+                              scheduledParam: {
+                                ...newTaskScheduledParam,
+                                startTime: startTime.toISOString(),
+                                endTime: endTime.toISOString(),
+                              },
+                            };
+                            createTask(taskData)
+                              .then(() => getTasks())
+                              .then(res => {
+                                if (res && res.data) {
+                                  dispatch(setTasks(res.data));
+                                }
+                                // 可选：刷新本地 scheduleData
+                                // setScheduleData(res.data); // 若后端返回格式一致
+                              })
+                              .catch(e => Alert.alert("Add Task Failed", String(e)))
+                              .finally(() => {
+                                resetModalFields();
+                                setModalVisible(false);
+                              });
+                          }}
+                        >
+                          <Text style={styles.buttonText}>Add Task</Text>
+                        </Pressable>
+                      )}
                       <Pressable
                         style={[styles.moreButton, { flex: 1 }]}
                         onPress={() => setShowMoreFields(!showMoreFields)}
@@ -1183,6 +1282,7 @@ const ScheduleScreen = ({}) => {
                       style={styles.closeIcon}
                       onPress={() => {
                         resetModalFields();
+                        setEditingTask(null);
                         setModalVisible(false);
                       }}
                     >
@@ -1198,7 +1298,7 @@ const ScheduleScreen = ({}) => {
       <Text style={styles.screenTitle}>Tasks TODO</Text>
 
       <SwipeListView
-        data={scheduleData.filter((item: any) => item.completed === null)}
+        data={todoTasks}
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
@@ -1208,19 +1308,24 @@ const ScheduleScreen = ({}) => {
           requestAnimationFrame(() => {
             changeScheduleData(Number(rowData.key), "completed", true);
           });
+          if (rowData.value >= SWIPETHRESHOLD) {
+            handleTaskStatusChange(Number(rowData.key), true);
+          }
         }}
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           requestAnimationFrame(() => {
             changeScheduleData(Number(rowData.key), "completed", false);
           });
+          if (rowData.value <= -SWIPETHRESHOLD) {
+            handleTaskStatusChange(Number(rowData.key), false);
+          }
         }}
       />
 
       <Text style={styles.screenTitle}>Tasks Completed</Text>
-
       <SwipeListView
-        data={scheduleData.filter((item: any) => item.completed)}
+        data={completedTasks}
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
@@ -1228,14 +1333,16 @@ const ScheduleScreen = ({}) => {
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           requestAnimationFrame(() => {
-            changeScheduleData(rowData.key, "completed", false);
+            changeScheduleData(Number(rowData.key), "completed", false);
           });
+          if (rowData.value <= -SWIPETHRESHOLD) {
+            handleTaskStatusChange(Number(rowData.key), false);
+          }
         }}
       />
       <Text style={styles.screenTitle}>Tasks Not Done</Text>
-
       <SwipeListView
-        data={scheduleData.filter((item: any) => item.completed === false)}
+        data={notDoneTasks}
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
@@ -1243,8 +1350,9 @@ const ScheduleScreen = ({}) => {
         leftActivationValue={SWIPETHRESHOLD}
         onLeftActionStatusChange={(rowData) => {
           requestAnimationFrame(() => {
-            changeScheduleData(rowData.key, "completed", true);
+            changeScheduleData(Number(rowData.key), "completed", null);
           });
+          // 可选：如需联动 handleTaskStatusChange 可加
         }}
       />
 

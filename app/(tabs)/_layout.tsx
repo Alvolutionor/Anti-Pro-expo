@@ -30,13 +30,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <FontAwesome size={28} name="calendar" color={color} />,
         }}
       />
-          <Tabs.Screen
+          {/* <Tabs.Screen
         name="goal"
         options={{
           title: 'Goals',
           tabBarIcon: ({ color }) => <Entypo size={28} name="text-document" color={color} />,
         }}
-      />
+      /> */}
       <Tabs.Screen
         name="statistic"
         options={{

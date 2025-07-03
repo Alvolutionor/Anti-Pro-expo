@@ -167,7 +167,8 @@ export async function getTask(taskId: number) {
 }
 
 // 12. 更新任务
-export async function updateTask(taskId: number, data: CreateTaskData) {
+export type UpdateTaskData = Partial<CreateTaskData>;
+export async function updateTask(taskId: number, data: UpdateTaskData) {
   return api.patch(`/tasks/${taskId}`, data);
 }
 
