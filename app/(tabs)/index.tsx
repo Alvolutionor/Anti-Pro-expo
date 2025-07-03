@@ -33,6 +33,9 @@ import { scheduleTaskNotification as utilScheduleTaskNotification } from '../../
 import { getTags, createTask, getTasks, updateTask } from '../../utils/api';
 import { useDispatch } from "react-redux";
 import { setTasks } from "../../store/taskSlice";
+import { LogBox } from 'react-native';
+
+LogBox.ignoreLogs(['useInsertionEffect must not schedule updates']);
 
 const genMockTimeblock = () => {
   return {
@@ -240,10 +243,13 @@ const ScheduleScreen = ({}) => {
     // 兼容 startTime/endTime 可能为 null
     const start = item.startTime instanceof Date ? item.startTime : null;
     const end = item.endTime instanceof Date ? item.endTime : null;
+    // 判断当前 item 是否属于 notDoneTasks
+    const isNotDone = item.completed === false && end && end <= new Date();
     return (
       <Pressable
         style={[styles.timeBlock, { backgroundColor: "#DEF3FD" }]}
         onPress={() => {
+          // 点击显示详细信息（展开）
           changeScheduleData(item.id, "fold", !item.fold);
         }}
         onLongPress={() => handleEditTask(item)}
@@ -283,11 +289,9 @@ const ScheduleScreen = ({}) => {
                     })
                   : "--:--"}
               </Text>
-
               {/* 显示任务名称 */}
               <Text style={styles.taskNameText}>{item.name}</Text>
             </View>
-
             {!item.fold && (
               <View
                 style={{
@@ -299,8 +303,8 @@ const ScheduleScreen = ({}) => {
               >
                 {/* 显示描述 */}
                 <Text style={styles.eventText}>{item.details.description}</Text>
-                {/* Move to TODO 按钮，仅在 completed 为 true 或 false 时显示 */}
-                {(item.completed === true || item.completed === false) && (
+                {/* 仅在 notDoneTasks 区域显示 Move to TODO 按钮 */}
+                {isNotDone && (
                   <Pressable
                     style={{
                       backgroundColor: "#FFA500",
