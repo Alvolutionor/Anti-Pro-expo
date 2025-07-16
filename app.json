@@ -15,7 +15,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.hjtester.helperFront"
     },
     "web": {
       "bundler": "metro",
@@ -36,6 +37,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3df22e12-bc51-44cf-8555-af91a407261e"
+      }
     }
   }
 }

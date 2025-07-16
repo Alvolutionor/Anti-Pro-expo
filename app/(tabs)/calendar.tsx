@@ -29,7 +29,7 @@ function convertTasksToMarkedDates(goals: GoalOut[], tasks: TaskOut[], colors: s
     return `${year}-${month}-${day}`;
   }
 
-  // 先处理有 goalId 的任务
+  // 先处理有 goalId的任务
   for (let index = 0; index < goals.length; index++) {
     const goal = goals[index];
     // colors[0] 是无 goalId 任务色，goal.id 从 1 开始，需 colors[index+1]
@@ -331,9 +331,21 @@ const TaskCard = (({ task, color }) => {
     startTime = singleDay.toISOString();
     endTime = singleDay.toISOString();
   }
+
   return (
-    <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 10, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: color, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 2, elevation: 1 }}>
-      <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{task.name || '未命名任务'}</Text>
+    <View style={{
+      backgroundColor: '#fff',
+      borderRadius: 6,
+      padding: 8,
+      marginBottom: 6,
+      borderLeftWidth: 4,
+      borderLeftColor: color,
+      shadowColor: '#000',
+      shadowOpacity: 0.04,
+      shadowRadius: 2,
+      elevation: 1,
+    }}>
+      <Text style={{ fontWeight: 'bold', fontSize: 14, marginBottom: 4 }}>{task.name || '未命名任务'}</Text>
       {noTime && (
         <Text style={{ color: '#888', fontSize: 12 }}>单日任务</Text>
       )}
@@ -365,7 +377,17 @@ const TaskCard = (({ task, color }) => {
         </View>
       )}
       {task.details && (
-        <Text style={{ color: '#666', fontSize: 13, marginTop: 2 }}>{typeof task.details === 'string' ? task.details : JSON.stringify(task.details)}</Text>
+        <View style={{ marginTop: 4 }}>
+          {typeof task.details === 'string' ? (
+            <Text style={{ color: '#666', fontSize: 12 }}>{task.details}</Text>
+          ) : (
+            Object.entries(task.details).map(([key, value]) => (
+              <Text key={key} style={{ color: '#666', fontSize: 12 }}>
+                {key}: {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+              </Text>
+            ))
+          )}
+        </View>
       )}
     </View>
   );
@@ -398,7 +420,7 @@ const TaskCard = (({ task, color }) => {
           value={value}
           itemKey={"id"}
           items={[
-            { label: "无目标任务", value: 0, id: 0 },
+            { label: "Uncategorized tasks", value: 0, id: 0 },
             ...reduxGoals.map((goal: GoalOut, idx: number) => ({ label: goal.name, value: goal.id, id: goal.id }))
           ]}
           setOpen={setOpen}
@@ -417,9 +439,9 @@ const TaskCard = (({ task, color }) => {
           const noGoalTasks = reduxTasks.filter((task: TaskOut) => !task.goalId || task.goalId === 0);
           return (
             <View key={0} style={{ marginTop: 10, padding: 10, backgroundColor: '#f7f7f7', borderRadius: 8 }}>
-              <Text style={{ fontWeight: 'bold', marginBottom: 8, color: '#888' }}>无目标任务</Text>
+              <Text style={{ fontWeight: 'bold', marginBottom: 8, color: '#888' }}>Uncategorized tasks</Text>
               {noGoalTasks.length === 0 ? (
-                <Text style={{ color: '#bbb' }}>暂无无目标任务</Text>
+                <Text style={{ color: '#bbb' }}>No tasks</Text>
               ) : (
                 noGoalTasks.map((task: TaskOut) => (
                   <TaskCard key={task.id} task={task} color={'#B2B09B'} />

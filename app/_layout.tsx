@@ -33,6 +33,7 @@ export default function RootLayout() {
     <Provider store={store}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
+          <Stack.Screen name="auth" options={{ title: "Login", headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ title: "Home", headerShown: false }} />
           <Stack.Screen name="day-view/[date]" options={({ route }) => ({ title: route.params.date + ' Agenda' || '' })} />
           <Stack.Screen name="+not-found" />

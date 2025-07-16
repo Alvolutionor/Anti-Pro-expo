@@ -2,7 +2,8 @@ import axios from "axios";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // const API_BASE = "http://3.26.35.148:8080";
-const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
+const API_BASE = "http://13.211.79.130:8000";
+// const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
 
 // 获取token的辅助函数（React Native 环境用 AsyncStorage）
 async function getToken() {

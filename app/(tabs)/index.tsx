@@ -35,7 +35,7 @@ import { useDispatch } from "react-redux";
 import { setTasks } from "../../store/taskSlice";
 import { LogBox } from 'react-native';
 
-LogBox.ignoreLogs(['useInsertionEffect must not schedule updates']);
+LogBox.ignoreLogs(['useInsertionEffect must not schedule updates']);// some issue with swiper package
 
 const genMockTimeblock = () => {
   return {
