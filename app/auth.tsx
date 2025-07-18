@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, Text, TextInput, Button, StyleSheet, Alert, Keyboard, TouchableWithoutFeedback } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
-import { registerUser, loginUser } from "../utils/api";
+import { registerUser, loginUser, validateToken } from "../utils/api";
 
 export default function AuthScreen() {
   const router = useRouter();
@@ -11,6 +11,25 @@ export default function AuthScreen() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // 自动登录逻辑：如果本地有token，验证其有效性后再跳转
+  useEffect(() => {
+    const checkToken = async () => {
+      const token = await AsyncStorage.getItem("access_token");
+      if (token) {
+        console.log("Found stored token, validating...");
+        const validation = await validateToken();
+        if (validation.valid) {
+          console.log("Token is valid, redirecting to main app");
+          router.replace("/(tabs)");
+        } else {
+          console.log("Token is invalid:", validation.error);
+          // Token已在validateToken中被清除，用户需要重新登录
+        }
+      }
+    };
+    checkToken();
+  }, []);
 
   const handleSubmit = async () => {
     Keyboard.dismiss();

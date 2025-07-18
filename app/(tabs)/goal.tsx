@@ -28,6 +28,8 @@ import {
   CreateGoalData,
   createTask,
   deleteTask,
+  updateTask,
+  validateToken,
 } from "../../utils/api";
 import {
   setGoals,
@@ -35,16 +37,24 @@ import {
   updateGoal as updateGoalRedux,
   deleteGoal as deleteGoalRedux,
 } from "../../store/goalSlice";
-import { setTasks } from "../../store/taskSlice";
+import { setTasks, deleteTask as deleteTaskRedux } from "../../store/taskSlice";
 import AntDesign from "@expo/vector-icons/AntDesign";
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getTags } from '../../utils/api';
-import { scheduleTaskNotification as utilScheduleTaskNotification } from '../../utils/notifications';
+import { scheduleTaskNotification as utilScheduleTaskNotification, scheduleAllUpcomingTaskNotifications, testThirtySecondTaskNotification, sendSimpleNotification } from '../../utils/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
+import VoiceInputButton from '../../components/VoiceInputButton';
 
 export default function GoalsManager() {
+  const router = useRouter();
   const dispatch = useDispatch<AppDispatch>();
   const goals = useSelector((state: RootState) => state.goal.goals);
   const tasks = useSelector((state: RootState) => state.task.tasks);
+  
+  // 添加认证状态检查
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingGoal, setEditingGoal] = useState<GoalOut | null>(null);
@@ -67,9 +77,40 @@ export default function GoalsManager() {
     }
   };
 
+  // 认证检查
   useEffect(() => {
-    fetchGoalsAndTasks();
+    const checkAuth = async () => {
+      try {
+        const token = await AsyncStorage.getItem("access_token");
+        if (!token) {
+          router.replace("/auth");
+          return;
+        }
+        
+        const validation = await validateToken();
+        if (!validation.valid) {
+          console.log("Token validation failed:", validation.error);
+          router.replace("/auth");
+          return;
+        }
+        
+        setIsAuthenticated(true);
+      } catch (error) {
+        console.error("Auth check failed:", error);
+        router.replace("/auth");
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+    
+    checkAuth();
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchGoalsAndTasks();
+    }
+  }, [isAuthenticated]);
 
   const openAddModal = () => {
     setEditingGoal(null);
@@ -147,6 +188,10 @@ export default function GoalsManager() {
   const [tagList, setTagList] = useState<{ id: number; name: string; color?: string }[]>([]);
   const [savingTask, setSavingTask] = useState(false);
   const [taskFoldMap, setTaskFoldMap] = useState<{ [id: number]: boolean }>({});
+  
+  // Edit Task 相关 state
+  const [editTaskModalVisible, setEditTaskModalVisible] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskOut | null>(null);
 
   // 拉取 tag 列表
   useEffect(() => {
@@ -194,6 +239,8 @@ export default function GoalsManager() {
       // 刷新 tasks
       const tasksRes = await getTasks();
       dispatch(setTasks(tasksRes.data));
+      // 重新安排所有任务通知
+      scheduleAllUpcomingTaskNotifications().catch(console.error);
       setAddTaskModalVisible(false);
       setNewTaskName("");
       setNewTaskTags([]);
@@ -212,22 +259,157 @@ export default function GoalsManager() {
   };
     // renderGoal 任务卡片加 fold/展开按钮
   const handleDeleteTask = async (taskId: number) => {
+    const task = tasks.find(t => t.id === taskId);
+    Alert.alert(
+      "Delete Task", 
+      `Are you sure to delete '${task?.name || 'this task'}'?`, 
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteTask(taskId);
+              // 立即更新Redux状态
+              dispatch(deleteTaskRedux(taskId));
+              // 强制刷新任务列表以确保删除生效
+              const tasksRes = await getTasks();
+              dispatch(setTasks(tasksRes.data));
+              // 重新安排所有任务通知
+              scheduleAllUpcomingTaskNotifications().catch(console.error);
+            } catch (e) {
+              Alert.alert('Failed to delete task', String(e));
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // 长按任务操作菜单
+  const handleLongPressTask = (task: TaskOut) => {
+    Alert.alert(
+      "Task Actions",
+      `What would you like to do with "${task.name}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: task.completed ? "Mark as Incomplete" : "Mark as Complete",
+          onPress: async () => {
+            try {
+              await updateTask(task.id, { ...task, completed: !task.completed });
+              const tasksRes = await getTasks();
+              dispatch(setTasks(tasksRes.data));
+              // 重新安排所有任务通知（完成状态变化会影响通知安排）
+              scheduleAllUpcomingTaskNotifications().catch(console.error);
+            } catch (e) {
+              Alert.alert('Failed to update task', String(e));
+            }
+          }
+        },
+        {
+          text: "Edit",
+          onPress: () => {
+            setEditingTask(task);
+            setNewTaskName(task.name);
+            setNewTaskTags(Array.isArray(task.tags) ? task.tags.map(t => typeof t === 'number' ? t : Number(t)) : []);
+            setNewTaskStartTime(task.scheduledParam?.startTime || "");
+            setNewTaskEndTime(task.scheduledParam?.endTime || "");
+            setNewTaskScheduled(task.scheduled || "onetime");
+            setNewTaskScheduledParam(task.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+            // 设置详情字段
+            if (task.details && typeof task.details === 'object') {
+              const detailsArray = Object.entries(task.details).map(([key, value]) => ({ key, value: String(value) }));
+              setDetails(detailsArray.length > 0 ? detailsArray : [{ key: "desc", value: "" }]);
+            } else {
+              setDetails([{ key: "desc", value: "" }]);
+            }
+            setEditTaskModalVisible(true);
+          }
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => handleDeleteTask(task.id)
+        }
+      ]
+    );
+  };
+
+  // 更新任务
+  const handleUpdateTask = async () => {
+    if (!editingTask || !newTaskName.trim()) {
+      Alert.alert("Task name is required");
+      return;
+    }
+    setSavingTask(true);
     try {
-      await deleteTask(taskId);
+      const data = {
+        name: newTaskName,
+        tags: newTaskTags,
+        goalId: editingTask.goalId,
+        details: details.reduce((acc: Record<string, any>, detail) => {
+          if (!detail.key) {
+            acc['desc'] = detail.value;
+          } else {
+            acc[detail.key] = detail.value;
+          }
+          return acc;
+        }, {}),
+        scheduled: newTaskScheduled,
+        scheduledParam: {
+          ...newTaskScheduledParam,
+          startTime: newTaskStartTime || undefined,
+          endTime: newTaskEndTime || undefined,
+        },
+      };
+      await updateTask(editingTask.id, data);
+      // 刷新任务列表
       const tasksRes = await getTasks();
       dispatch(setTasks(tasksRes.data));
+      // 重新安排所有任务通知
+      scheduleAllUpcomingTaskNotifications().catch(console.error);
+      setEditTaskModalVisible(false);
+      setEditingTask(null);
+      // 重置表单
+      setNewTaskName("");
+      setNewTaskTags([]);
+      setNewTaskStartTime("");
+      setNewTaskEndTime("");
+      setDetails([{ key: "desc", value: "" }]);
+      setNewTaskScheduled("onetime");
+      setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
     } catch (e) {
-      Alert.alert('Failed to delete task', String(e));
+      Alert.alert("Failed to update task", String(e));
+    } finally {
+      setSavingTask(false);
     }
   };
 
+  // 在渲染目录前，构造一个包含"无目标任务"的假 Goal 列表
+  const unassignedTasks = tasks.filter((t: TaskOut) => t.goalId == null);
+  const displayGoals: GoalOut[] = [
+    { id: -1, name: '无目标任务', description: '', achieved: false, lifePoints: undefined, priority: undefined, userId: 0, isDeleted: false, createdAt: '', updatedAt: '' },
+    ...goals
+  ];
+
   const renderGoal = ({ item }: { item: GoalOut }) => {
-    const goalTasks: TaskOut[] = tasks.filter((t: TaskOut) => t.goalId === item.id);
+    // 区分普通 goal 和“无目标任务”节点
+    const goalTasks: TaskOut[] = item.id === -1
+      ? unassignedTasks
+      : tasks.filter((t: TaskOut) => t.goalId === item.id);
     const expanded = expandedGoalId === item.id;
     return (
       <View style={styles.goalCard}>
         <TouchableOpacity
-          onPress={() => setExpandedGoalId(expanded ? null : item.id)}
+          onPress={() => {
+            setExpandedGoalId(expanded ? null : item.id);
+            // 当展开goal时，收起所有任务
+            if (!expanded) {
+              setTaskFoldMap({});
+            }
+          }}
           style={{ flexDirection: 'row', alignItems: 'center' }}
         >
           <AntDesign
@@ -237,7 +419,9 @@ export default function GoalsManager() {
             style={{ marginRight: 8 }}
           />
           <View style={{ flex: 1 }}>
-            <Text style={styles.goalTitle}>{item.name}</Text>
+            <Text style={styles.goalTitle}>
+              {item.id === -1 ? '无目标任务' : item.name}
+            </Text>
             {item.description ? (
               <Text style={styles.goalDesc}>{item.description}</Text>
             ) : null}
@@ -268,21 +452,25 @@ export default function GoalsManager() {
             ) : (
               <View style={styles.taskTreeBox}>
                 <View style={styles.taskTreeLine} />
-                <SwipeListView
+                <FlatList
                   data={goalTasks}
                   keyExtractor={(task) => task.id.toString()}
                   renderItem={({ item: task }) => {
                     let startTime = task.scheduledParam?.startTime;
                     let endTime = task.scheduledParam?.endTime;
-                    const folded = !!taskFoldMap[task.id];
+                    // 默认所有任务都是折叠的，除非在 taskFoldMap 中明确设置为 false
+                    const folded = taskFoldMap[task.id] !== false;
                     return (
                       <View key={task.id} style={styles.taskCardTree}>
                         <TouchableOpacity
-                          onPress={() => setTaskFoldMap(m => ({ ...m, [task.id]: !m[task.id] }))}
+                          onPress={() => setTaskFoldMap(m => ({ ...m, [task.id]: !folded }))}
+                          onLongPress={() => handleLongPressTask(task)}
+                          delayLongPress={500}
                           style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}
                         >
                           <AntDesign name={folded ? 'right' : 'down'} size={14} color="#007bff" style={{ marginRight: 4 }} />
                           <Text style={styles.taskTitle}>{task.name}</Text>
+                          <Text style={styles.taskHint}>• Long press for options</Text>
                         </TouchableOpacity>
                         {!folded && (
                           <>
@@ -328,18 +516,6 @@ export default function GoalsManager() {
                       </View>
                     );
                   }}
-                  renderHiddenItem={({ item: task }) => (
-                    <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', height: '100%' }}>
-                      <TouchableOpacity
-                        style={{ backgroundColor: '#d33', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10, marginRight: 12 }}
-                        onPress={() => handleDeleteTask(task.id)}
-                      >
-                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>Delete</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  rightOpenValue={-90}
-                  disableRightSwipe
                   showsVerticalScrollIndicator={false}
                   style={{ backgroundColor: 'transparent' }}
                   contentContainerStyle={{ paddingBottom: 0 }}
@@ -412,25 +588,42 @@ export default function GoalsManager() {
   };
 
   // AddTaskModal 组件，参考 index.tsx 的 startTime/endTime 显示逻辑和 timepicker UI
-  function AddTaskModal({ visible, goalId, onClose, onSuccess }: {
+  function AddTaskModal({ visible, goalId, onClose, onSuccess, isEdit = false, initialData }: {
     visible: boolean; goalId: number | null; onClose: () => void;
-    onSuccess: () => void
+    onSuccess: () => void; isEdit?: boolean; initialData?: {
+      name?: string; tags?: number[]; startTime?: string; endTime?: string;
+      scheduled?: string; scheduledParam?: any; details?: { key: string; value: string; }[];
+    };
   }) {
     const dispatch = useDispatch<AppDispatch>();
-    const [newTaskName, setNewTaskName] = useState("");
+    const [newTaskName, setNewTaskName] = useState(initialData?.name || "");
     const [newTaskEvent, setNewTaskEvent] = useState("");
-    const [newTaskStartTime, setNewTaskStartTime] = useState("");
-    const [newTaskEndTime, setNewTaskEndTime] = useState("");
-    const [details, setDetails] = useState([{ key: "desc", value: "" }]);
+    const [newTaskStartTime, setNewTaskStartTime] = useState(initialData?.startTime || "");
+    const [newTaskEndTime, setNewTaskEndTime] = useState(initialData?.endTime || "");
+    const [details, setNewTaskDetails] = useState(initialData?.details || [{ key: "desc", value: "" }]);
     const [showStartTimePicker, setShowStartTimePicker] = useState(false);
     const [showEndTimePicker, setShowEndTimePicker] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [showMoreFields, setShowMoreFields] = useState(true);
-    const [newTaskScheduled, setNewTaskScheduled] = useState("onetime");
-    const [newTaskScheduledParam, setNewTaskScheduledParam] = useState<any>({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+    const [newTaskScheduled, setNewTaskScheduled] = useState(initialData?.scheduled || "onetime");
+    const [newTaskScheduledParam, setNewTaskScheduledParam] = useState<any>(initialData?.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
     const [modalOpenDropdown, setModalOpenDropdown] = useState<null | string>(null);
     const [tagList, setTagList] = useState<{ id: number; name: string; color?: string }[]>([]);
     const [savingTask, setSavingTask] = useState(false);
+    const [localNewTaskTags, setLocalNewTaskTags] = useState<number[]>(initialData?.tags || []);
+
+    // 当 initialData 变化时更新状态
+    useEffect(() => {
+      if (isEdit && initialData) {
+        setNewTaskName(initialData.name || "");
+        setNewTaskStartTime(initialData.startTime || "");
+        setNewTaskEndTime(initialData.endTime || "");
+        setNewTaskDetails(initialData.details || [{ key: "desc", value: "" }]);
+        setNewTaskScheduled(initialData.scheduled || "onetime");
+        setNewTaskScheduledParam(initialData.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+        setLocalNewTaskTags(initialData.tags || []);
+      }
+    }, [isEdit, initialData]);
 
     useEffect(() => {
       getTags().then(res => {
@@ -444,13 +637,13 @@ export default function GoalsManager() {
 
     // 详情字段动态增删
     const handleDetailChange = (idx: number, value: string) => {
-      setDetails(details => details.map((d, i) => i === idx ? { ...d, value } : d));
+      setNewTaskDetails(details => details.map((d, i) => i === idx ? { ...d, value } : d));
     };
     const handleAddDetail = () => {
-      setDetails(details => [...details, { key: "", value: "" }]);
+      setNewTaskDetails(details => [...details, { key: "", value: "" }]);
     };
     const handleDeleteDetail = (idx: number) => {
-      setDetails(details => details.filter((_, i) => i !== idx));
+      setNewTaskDetails(details => details.filter((_, i) => i !== idx));
     };
 
     // index.tsx 逻辑：不同 scheduled 类型下，start/end time 的显示和 picker 类型
@@ -463,7 +656,7 @@ export default function GoalsManager() {
         Alert.alert("Task name is required");
         return;
       }
-      if (!goalId) {
+      if (!goalId && !isEdit) {
         Alert.alert("No goal selected");
         return;
       }
@@ -471,8 +664,8 @@ export default function GoalsManager() {
       try {
         const data = {
           name: newTaskName,
-          tags: newTaskTags,
-          goalId: goalId,
+          tags: localNewTaskTags,
+          goalId: goalId || undefined,
           details: details.reduce((acc: Record<string, any>, detail) => {
             if (!detail.key) {
               acc['desc'] = detail.value;
@@ -488,13 +681,21 @@ export default function GoalsManager() {
             endTime: newTaskEndTime || undefined,
           },
         };
-        await createTask(data);
-        const tasksRes = await getTasks();
-        dispatch(setTasks(tasksRes.data));
-        onSuccess();
-        handleClose();
+        
+        if (isEdit) {
+          // 如果是编辑模式，调用 onSuccess (实际上是 handleUpdateTask)
+          onSuccess();
+        } else {
+          await createTask(data);
+          const tasksRes = await getTasks();
+          dispatch(setTasks(tasksRes.data));
+          // 重新安排所有任务通知
+          scheduleAllUpcomingTaskNotifications().catch(console.error);
+          onSuccess();
+          handleClose();
+        }
       } catch (e) {
-        Alert.alert("Failed to add task", String(e));
+        Alert.alert(isEdit ? "Failed to update task" : "Failed to add task", String(e));
       } finally {
         setSavingTask(false);
       }
@@ -502,11 +703,11 @@ export default function GoalsManager() {
 
     const handleClose = () => {
       setNewTaskName("");
-      setNewTaskTags([]); // 重置标签
+      setLocalNewTaskTags([]); // 重置标签
       setNewTaskEvent("");
       setNewTaskStartTime("");
       setNewTaskEndTime("");
-      setDetails([{ key: "desc", value: "" }]);
+      setNewTaskDetails([{ key: "desc", value: "" }]);
       setNewTaskScheduled("onetime");
       setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
       setModalOpenDropdown(null);
@@ -524,16 +725,26 @@ export default function GoalsManager() {
             <TouchableWithoutFeedback onPress={() => { }}>
               <View style={styles.modalContent}>
                 <ScrollView keyboardShouldPersistTaps="handled">
-                  <Text style={styles.modalTitle}>Add Task</Text>
-                  {/* Task Name Input */}
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Task Name (e.g. Read a book)"
-                    value={newTaskName}
-                    onChangeText={setNewTaskName}
-                    maxLength={40}
-                    autoCapitalize="sentences"
-                  />
+                  <Text style={styles.modalTitle}>{isEdit ? "Edit Task" : "Add Task"}</Text>
+                  
+                  {/* Task Name Input with Voice Recognition */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      placeholder="Task Name (e.g. Read a book)"
+                      value={newTaskName}
+                      onChangeText={setNewTaskName}
+                      maxLength={40}
+                      autoCapitalize="sentences"
+                    />
+                    <VoiceInputButton
+                      onTextReceived={(text) => {
+                        setNewTaskName(text);
+                      }}
+                      placeholder="语音"
+                      style={{ minWidth: 70 }}
+                    />
+                  </View>
                   {/* Scheduled 下拉选择 - 统一下拉菜单风格 */}
                   <View style={{ marginBottom: 12 }}>
                     <Text style={styles.goalField}>Scheduled</Text>
@@ -706,7 +917,7 @@ export default function GoalsManager() {
                                 style={[styles.detailPickerOption, detail.key === opt && { backgroundColor: '#e6f0ff' }]
                                 }
                                 onPress={() => {
-                                  setDetails(ds => ds.map((d, i) => i === idx ? { ...d, key: opt } : d));
+                                  setNewTaskDetails(ds => ds.map((d, i) => i === idx ? { ...d, key: opt } : d));
                                   setModalOpenDropdown(null);
                                 }}
                               >
@@ -741,7 +952,7 @@ export default function GoalsManager() {
                         <TouchableOpacity
                           key={tag.id}
                           style={{
-                            backgroundColor: newTaskTags.includes(tag.id) ? (tag.color || '#007bff') : '#eee',
+                            backgroundColor: localNewTaskTags.includes(tag.id) ? (tag.color || '#007bff') : '#eee',
                             borderRadius: 16,
                             paddingHorizontal: 12,
                             paddingVertical: 6,
@@ -749,10 +960,10 @@ export default function GoalsManager() {
                             marginBottom: 8,
                           }}
                           onPress={() => {
-                            setNewTaskTags(tags => tags.includes(tag.id) ? tags.filter(t => t !== tag.id) : [...tags, tag.id]);
+                            setLocalNewTaskTags(tags => tags.includes(tag.id) ? tags.filter(t => t !== tag.id) : [...tags, tag.id]);
                           }}
                         >
-                          <Text style={{ color: newTaskTags.includes(tag.id) ? '#fff' : '#333' }}>{tag.name}</Text>
+                          <Text style={{ color: localNewTaskTags.includes(tag.id) ? '#fff' : '#333' }}>{tag.name}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -763,7 +974,9 @@ export default function GoalsManager() {
                       <Text style={{ color: "#888", fontSize: 16 }}>Cancel</Text>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={handleAddTask} disabled={savingTask}>
-                      <Text style={{ color: savingTask ? "#aaa" : "#007bff", fontSize: 16 }}>{savingTask ? "Adding..." : "Add"}</Text>
+                      <Text style={{ color: savingTask ? "#aaa" : "#007bff", fontSize: 16 }}>
+                        {savingTask ? (isEdit ? "Updating..." : "Adding...") : (isEdit ? "Update" : "Add")}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </ScrollView>
@@ -777,12 +990,27 @@ export default function GoalsManager() {
   // 修复：确保 AddTaskModal 组件完整闭合
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Goals & Tasks</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Text style={styles.header}>Goals & Tasks</Text>
+        <TouchableOpacity
+          style={{ backgroundColor: '#007bff', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
+          onPress={async () => {
+            try {
+              await sendSimpleNotification();
+              Alert.alert('Success', 'Test notification sent!');
+            } catch (e) {
+              Alert.alert('Error', 'Failed to send notification: ' + String(e));
+            }
+          }}
+        >
+          <Text style={{ color: 'white', fontSize: 12 }}>Test Notification</Text>
+        </TouchableOpacity>
+      </View>
       {loading ? (
         <ActivityIndicator size="large" />
       ) : (
         <FlatList
-          data={goals}
+          data={displayGoals}
           keyExtractor={(g) => g.id.toString()}
           renderItem={renderGoal}
           ListEmptyComponent={
@@ -807,22 +1035,44 @@ export default function GoalsManager() {
             <TouchableWithoutFeedback>
               <View style={{ backgroundColor: "#fff", padding: 24, borderRadius: 12, width: 300 }}>
                 <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 12 }}>Add Goal</Text>
-                <TextInput
-                  style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
-                  placeholder="Goal Name (e.g. Fitness)"
-                  value={newGoalName}
-                  onChangeText={setNewGoalName}
-                  maxLength={32}
-                  autoCapitalize="words"
-                />
-                <TextInput
-                  style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12, minHeight: 40 }}
-                  placeholder="Description (e.g. Run 3 times a week)"
-                  value={newGoalDesc}
-                  onChangeText={setNewGoalDesc}
-                  multiline
-                  maxLength={100}
-                />
+                
+                {/* Goal Name Input with Voice Recognition */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+                  <TextInput
+                    style={{ flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8 }}
+                    placeholder="Goal Name (e.g. Fitness)"
+                    value={newGoalName}
+                    onChangeText={setNewGoalName}
+                    maxLength={32}
+                    autoCapitalize="words"
+                  />
+                  <VoiceInputButton
+                    onTextReceived={(text) => {
+                      setNewGoalName(text);
+                    }}
+                    placeholder="语音"
+                    style={{ minWidth: 70 }}
+                  />
+                </View>
+                
+                {/* Goal Description Input with Voice Recognition */}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 8 }}>
+                  <TextInput
+                    style={{ flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, minHeight: 40 }}
+                    placeholder="Description (e.g. Run 3 times a week)"
+                    value={newGoalDesc}
+                    onChangeText={setNewGoalDesc}
+                    multiline
+                    maxLength={100}
+                  />
+                  <VoiceInputButton
+                    onTextReceived={(text) => {
+                      setNewGoalDesc(text);
+                    }}
+                    placeholder="语音"
+                    style={{ minWidth: 70 }}
+                  />
+                </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
                   <Text style={{ marginRight: 8 }}>Achieved:</Text>
                   <Button title={newGoalAchieved ? "Yes" : "No"} onPress={() => setNewGoalAchieved(v => !v)} />
@@ -866,23 +1116,46 @@ export default function GoalsManager() {
                   <Text style={styles.modalTitle}>
                     {editingGoal ? "Edit Goal" : "Add Goal"}
                   </Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Name* (e.g. Fitness, Learn React)"
-                    value={form.name}
-                    onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
-                    autoCapitalize="words"
-                    maxLength={32}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Description (e.g. Run 3 times a week)"
-                    value={form.description || ""}
-                    onChangeText={(v) =>
-                      setForm((f) => ({ ...f, description: v }))
-                    }
-                    maxLength={100}
-                  />
+                  
+                  {/* Goal Name Input with Voice Recognition */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      placeholder="Name* (e.g. Fitness, Learn React)"
+                      value={form.name}
+                      onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
+                      autoCapitalize="words"
+                      maxLength={32}
+                    />
+                    <VoiceInputButton
+                      onTextReceived={(text) => {
+                        setForm((f) => ({ ...f, name: text }));
+                      }}
+                      placeholder="语音"
+                      style={{ minWidth: 70 }}
+                    />
+                  </View>
+                  
+                  {/* Goal Description Input with Voice Recognition */}
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 8 }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      placeholder="Description (e.g. Run 3 times a week)"
+                      value={form.description || ""}
+                      onChangeText={(v) =>
+                        setForm((f) => ({ ...f, description: v }))
+                      }
+                      maxLength={100}
+                      multiline
+                    />
+                    <VoiceInputButton
+                      onTextReceived={(text) => {
+                        setForm((f) => ({ ...f, description: text }));
+                      }}
+                      placeholder="语音"
+                      style={{ minWidth: 70 }}
+                    />
+                  </View>
                   <View
                     style={{
                       flexDirection: "row",
@@ -966,6 +1239,25 @@ export default function GoalsManager() {
         goalId={addingTaskGoalId}
         onClose={() => setAddTaskModalVisible(false)}
         onSuccess={() => {}}
+      />
+      <AddTaskModal
+        visible={editTaskModalVisible}
+        goalId={editingTask?.goalId || null}
+        onClose={() => {
+          setEditTaskModalVisible(false);
+          setEditingTask(null);
+        }}
+        onSuccess={handleUpdateTask}
+        isEdit={true}
+        initialData={{
+          name: newTaskName,
+          tags: newTaskTags,
+          startTime: newTaskStartTime,
+          endTime: newTaskEndTime,
+          scheduled: newTaskScheduled,
+          scheduledParam: newTaskScheduledParam,
+          details: details
+        }}
       />
     </View>
   );
@@ -1061,6 +1353,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
     marginTop: 4,
+  },
+  taskHint: {
+    fontSize: 10,
+    color: "#aaa",
+    marginLeft: 8,
+    fontStyle: 'italic',
   },
   goalActions: {
     flexDirection: "row",

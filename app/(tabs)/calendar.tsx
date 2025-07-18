@@ -5,6 +5,7 @@ import { Calendar } from "react-native-calendars";
 import DropDownPicker from "react-native-dropdown-picker";
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 import {
   getGoals,
   getTasks,
@@ -242,6 +243,7 @@ const CalendarTab = ({}) => {
   const [value, setValue] = useState<number[]>([]);
   const [colors, setColors] = useState<string[]>([]);
   const [markedDates, setMarkedDates] = useState<any>({});
+  const [expandedGoalIds, setExpandedGoalIds] = useState<Set<number>>(new Set());
   // 已移除 add goal 相关 state
 
   // 直接用 reduxGoals 和 reduxTasks，无需本地 goals/tasks state
@@ -319,8 +321,23 @@ const CalendarTab = ({}) => {
   };
 
   // 已移除 add goal 相关函数
+  
+  const toggleGoalExpansion = (goalId: number) => {
+    setExpandedGoalIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(goalId)) {
+        newSet.delete(goalId);
+      } else {
+        newSet.add(goalId);
+      }
+      return newSet;
+    });
+  };
+
 // 任务卡片组件，支持多标签、无开始/结束时间渲染为单日
-const TaskCard = (({ task, color }) => {
+const TaskCard = ({ task, color }: { task: TaskOut; color: string }) => {
+  const [folded, setFolded] = useState(true); // 默认折叠状态
+  
   // 判断是否无开始/结束时间
   const noTime = !task.scheduledParam?.startTime && !task.scheduledParam?.endTime;
   let startTime = task.scheduledParam?.startTime;
@@ -331,6 +348,9 @@ const TaskCard = (({ task, color }) => {
     startTime = singleDay.toISOString();
     endTime = singleDay.toISOString();
   }
+
+  // 判断是否有详细信息需要显示
+  const hasDetails = (task.tags && task.tags.length > 0) || task.details || (!noTime && (startTime || endTime));
 
   return (
     <View style={{
@@ -345,53 +365,70 @@ const TaskCard = (({ task, color }) => {
       shadowRadius: 2,
       elevation: 1,
     }}>
-      <Text style={{ fontWeight: 'bold', fontSize: 14, marginBottom: 4 }}>{task.name || '未命名任务'}</Text>
-      {noTime && (
-        <Text style={{ color: '#888', fontSize: 12 }}>单日任务</Text>
-      )}
-      {startTime && !noTime && (
-        <Text style={{ color: '#888', fontSize: 12 }}>开始: {new Date(startTime).toLocaleString()}</Text>
-      )}
-      {endTime && !noTime && (
-        <Text style={{ color: '#888', fontSize: 12 }}>结束: {new Date(endTime).toLocaleString()}</Text>
-      )}
-      {task.tags && Array.isArray(task.tags) && task.tags.length > 0 && (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
-          {task.tags.map((tag: any, tagIdx: number) => (
-            <Text
-              key={tag.id || tagIdx}
-              style={{
-                backgroundColor: '#eee',
-                color: '#666',
-                borderRadius: 4,
-                paddingHorizontal: 6,
-                paddingVertical: 2,
-                fontSize: 12,
-                marginRight: 4,
-                marginBottom: 2,
-              }}
-            >
-              {tag.name || tag}
-            </Text>
-          ))}
-        </View>
-      )}
-      {task.details && (
-        <View style={{ marginTop: 4 }}>
-          {typeof task.details === 'string' ? (
-            <Text style={{ color: '#666', fontSize: 12 }}>{task.details}</Text>
-          ) : (
-            Object.entries(task.details).map(([key, value]) => (
-              <Text key={key} style={{ color: '#666', fontSize: 12 }}>
-                {key}: {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-              </Text>
-            ))
+      <TouchableOpacity 
+        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+        onPress={() => hasDetails ? setFolded(!folded) : null}
+      >
+        <Text style={{ fontWeight: 'bold', fontSize: 14, flex: 1 }}>{task.name || '未命名任务'}</Text>
+        {hasDetails && (
+          <Ionicons
+            name={folded ? 'chevron-forward' : 'chevron-down'}
+            size={16}
+            color="#666"
+          />
+        )}
+      </TouchableOpacity>
+      
+      {!folded && hasDetails && (
+        <View style={{ marginTop: 8 }}>
+          {noTime && (
+            <Text style={{ color: '#888', fontSize: 12 }}>单日任务</Text>
+          )}
+          {startTime && !noTime && (
+            <Text style={{ color: '#888', fontSize: 12 }}>开始: {new Date(startTime).toLocaleString()}</Text>
+          )}
+          {endTime && !noTime && (
+            <Text style={{ color: '#888', fontSize: 12 }}>结束: {new Date(endTime).toLocaleString()}</Text>
+          )}
+          {task.tags && Array.isArray(task.tags) && task.tags.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+              {task.tags.map((tag: any, tagIdx: number) => (
+                <Text
+                  key={tag.id || tagIdx}
+                  style={{
+                    backgroundColor: '#eee',
+                    color: '#666',
+                    borderRadius: 4,
+                    paddingHorizontal: 6,
+                    paddingVertical: 2,
+                    fontSize: 12,
+                    marginRight: 4,
+                    marginBottom: 2,
+                  }}
+                >
+                  {tag.name || tag}
+                </Text>
+              ))}
+            </View>
+          )}
+          {task.details && (
+            <View style={{ marginTop: 4 }}>
+              {typeof task.details === 'string' ? (
+                <Text style={{ color: '#666', fontSize: 12 }}>{task.details}</Text>
+              ) : (
+                Object.entries(task.details).map(([key, value]) => (
+                  <Text key={key} style={{ color: '#666', fontSize: 12 }}>
+                    {key}: {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                  </Text>
+                ))
+              )}
+            </View>
           )}
         </View>
       )}
     </View>
   );
-});
+};
   // 头部组件单独渲染，FlatList 只渲染任务组
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -437,15 +474,37 @@ const TaskCard = (({ task, color }) => {
       {value.map((goalId) => {
         if (goalId === 0) {
           const noGoalTasks = reduxTasks.filter((task: TaskOut) => !task.goalId || task.goalId === 0);
+          const expanded = expandedGoalIds.has(0);
           return (
-            <View key={0} style={{ marginTop: 10, padding: 10, backgroundColor: '#f7f7f7', borderRadius: 8 }}>
-              <Text style={{ fontWeight: 'bold', marginBottom: 8, color: '#888' }}>Uncategorized tasks</Text>
-              {noGoalTasks.length === 0 ? (
-                <Text style={{ color: '#bbb' }}>No tasks</Text>
-              ) : (
-                noGoalTasks.map((task: TaskOut) => (
-                  <TaskCard key={task.id} task={task} color={'#B2B09B'} />
-                ))
+            <View key={0} style={{ marginTop: 10, backgroundColor: '#f7f7f7', borderRadius: 8 }}>
+              <TouchableOpacity
+                style={{ 
+                  flexDirection: 'row', 
+                  alignItems: 'center', 
+                  padding: 10,
+                  justifyContent: 'space-between'
+                }}
+                onPress={() => toggleGoalExpansion(0)}
+              >
+                <Text style={{ fontWeight: 'bold', color: '#888', flex: 1 }}>
+                  Uncategorized tasks ({noGoalTasks.length})
+                </Text>
+                <Ionicons
+                  name={expanded ? 'chevron-down' : 'chevron-forward'}
+                  size={20}
+                  color="#888"
+                />
+              </TouchableOpacity>
+              {expanded && (
+                <View style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
+                  {noGoalTasks.length === 0 ? (
+                    <Text style={{ color: '#bbb' }}>No tasks</Text>
+                  ) : (
+                    noGoalTasks.map((task: TaskOut) => (
+                      <TaskCard key={task.id} task={task} color={'#B2B09B'} />
+                    ))
+                  )}
+                </View>
               )}
             </View>
           );
@@ -453,15 +512,37 @@ const TaskCard = (({ task, color }) => {
           const goal = reduxGoals.find((g: GoalOut) => g.id === goalId);
           const color = colors[reduxGoals.findIndex((g2: GoalOut) => g2.id === goalId) + 1] || '#007bff';
           const goalTasks = reduxTasks.filter((task: TaskOut) => task.goalId === goalId);
+          const expanded = expandedGoalIds.has(goalId);
           return (
-            <View key={goalId} style={{ marginTop: 10, padding: 10, backgroundColor: '#f7f7f7', borderRadius: 8 }}>
-              <Text style={{ fontWeight: 'bold', marginBottom: 8, color }}>{goal ? goal.name : `目标${goalId}`}</Text>
-              {goalTasks.length === 0 ? (
-                <Text style={{ color: '#bbb' }}>暂无任务</Text>
-              ) : (
-                goalTasks.map((task: TaskOut) => (
-                  <TaskCard key={task.id} task={task} color={color} />
-                ))
+            <View key={goalId} style={{ marginTop: 10, backgroundColor: '#f7f7f7', borderRadius: 8 }}>
+              <TouchableOpacity
+                style={{ 
+                  flexDirection: 'row', 
+                  alignItems: 'center', 
+                  padding: 10,
+                  justifyContent: 'space-between'
+                }}
+                onPress={() => toggleGoalExpansion(goalId)}
+              >
+                <Text style={{ fontWeight: 'bold', color, flex: 1 }}>
+                  {goal ? goal.name : `目标${goalId}`} ({goalTasks.length})
+                </Text>
+                <Ionicons
+                  name={expanded ? 'chevron-down' : 'chevron-forward'}
+                  size={20}
+                  color={color}
+                />
+              </TouchableOpacity>
+              {expanded && (
+                <View style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
+                  {goalTasks.length === 0 ? (
+                    <Text style={{ color: '#bbb' }}>暂无任务</Text>
+                  ) : (
+                    goalTasks.map((task: TaskOut) => (
+                      <TaskCard key={task.id} task={task} color={color} />
+                    ))
+                  )}
+                </View>
               )}
             </View>
           );

@@ -3533,6 +3533,11 @@ expo-router@~5.0.7:
     server-only "^0.0.1"
     shallowequal "^1.1.0"
 
+expo-speech@^13.1.7:
+  version "13.1.7"
+  resolved "https://registry.npmjs.org/expo-speech/-/expo-speech-13.1.7.tgz"
+  integrity sha512-RMMgK6IIPQD9uLhmY2Q9v+2j3wmTGqB/qZ7sdy5//5TLCzFwAq1vlpy5A2psVsctoWVxUO4EmlaNai0ahQmKRg==
+
 expo-splash-screen@~0.30.8:
   version "0.30.8"
   resolved "https://registry.npmjs.org/expo-splash-screen/-/expo-splash-screen-0.30.8.tgz"

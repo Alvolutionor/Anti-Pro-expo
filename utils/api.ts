@@ -2,8 +2,8 @@ import axios from "axios";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // const API_BASE = "http://3.26.35.148:8080";
-const API_BASE = "http://13.211.79.130:8000";
-// const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
+// const API_BASE = "http://13.211.79.130:8000";
+const API_BASE = "http://192.168.0.191:8000"; // 本地开发时使用
 
 // 获取token的辅助函数（React Native 环境用 AsyncStorage）
 async function getToken() {
@@ -26,6 +26,22 @@ api.interceptors.request.use(
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+// 响应拦截器处理401错误
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      // Token无效，清除本地存储的token
+      await AsyncStorage.removeItem("access_token");
+      console.log("Token expired or invalid, cleared from storage");
+      
+      // 可以在这里触发跳转到登录页，但需要小心避免循环
+      // 这里我们只是清除token，让应用的其他部分处理跳转
+    }
+    return Promise.reject(error);
+  }
 );
 
 // 类型定义
@@ -116,8 +132,12 @@ export async function registerUser(data: RegisterUserData) {
 
 // 2. 用户登录
 export async function loginUser(data: LoginUserData) {
-  // 修正为 /users/token
-  return api.post("/users/token", new URLSearchParams(data), {
+  // 修正为 /users/token，并正确转换数据格式
+  const formData = new URLSearchParams();
+  formData.append('username', data.username);
+  formData.append('password', data.password);
+  
+  return api.post("/users/token", formData, {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 }
@@ -125,6 +145,22 @@ export async function loginUser(data: LoginUserData) {
 // 3. 获取当前用户信息
 export async function getMe() {
   return api.get("/users/me");
+}
+
+// 验证token有效性
+export async function validateToken() {
+  try {
+    const response = await getMe();
+    return { valid: true, user: response.data };
+  } catch (error: any) {
+    if (error.response?.status === 401) {
+      // Token无效
+      await AsyncStorage.removeItem("access_token");
+      return { valid: false, error: 'Token expired' };
+    }
+    // 其他错误（网络问题等）
+    return { valid: false, error: error.message };
+  }
 }
 
 // 4. 创建目标
