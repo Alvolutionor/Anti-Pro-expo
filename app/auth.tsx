@@ -106,7 +106,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
   },
   title: {
     fontSize: 28,
@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
   input: {
     width: "100%",
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: "#dddddd",
     borderRadius: 8,
     padding: 12,
     marginBottom: 16,
@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
   },
   switch: {
     marginTop: 16,
-    color: "#007bff",
+    color: "#000000",
     textDecorationLine: "underline",
   },
 });

@@ -38,16 +38,16 @@ export const VoiceRecognitionButton: React.FC<VoiceRecognitionButtonProps> = ({
       
       if (status !== 'granted') {
         Alert.alert(
-          '需要麦克风权限',
-          '为了使用语音识别功能，请允许访问麦克风',
+          'Microphone Permission Required',
+          'To use voice recognition feature, please allow microphone access',
           [
-            { text: '取消', style: 'cancel' },
-            { text: '设置', onPress: () => Alert.alert('提示', '请在系统设置中开启麦克风权限') }
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Settings', onPress: () => Alert.alert('Reminder', 'Please enable microphone permission in system settings') }
           ]
         );
       }
     } catch (error) {
-      console.error('权限检查失败:', error);
+      console.error('Permission check failed:', error);
       setHasPermission(false);
     }
   };
@@ -73,10 +73,10 @@ export const VoiceRecognitionButton: React.FC<VoiceRecognitionButtonProps> = ({
       Speech.speak('开始录音', { language: 'zh-CN', rate: 1.2 });
       
     } catch (error) {
-      console.error('录音启动失败:', error);
+      console.error('Recording startup failed:', error);
       setIsRecording(false);
-      const errorMsg = '录音启动失败，请重试';
-      Alert.alert('错误', errorMsg);
+      const errorMsg = 'Recording startup failed, please try again';
+      Alert.alert('Error', errorMsg);
       onError?.(errorMsg);
     }
   };

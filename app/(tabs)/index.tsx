@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import DeviceInfo from "react-native-device-info";
 import {
   SafeAreaView,
@@ -28,12 +28,10 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSelector, TypedUseSelectorHook } from "react-redux";
 import { RootState } from "../../store/store";
 import { Platform } from "react-native";
-import { 
-  scheduleAllUpcomingTaskNotifications
-} from '../../utils/notifications';
 import { getTags, createTask, getTasks, updateTask, validateToken, getGoals } from '../../utils/api';
+import { generatePeriodicTaskInstances } from '../../utils/time';
 import { useDispatch } from "react-redux";
-import { setTasks } from "../../store/taskSlice";
+import { setTasks, updateTask as updateTaskInStore } from "../../store/taskSlice";
 import { setGoals } from "../../store/goalSlice";
 import { LogBox } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -70,7 +68,6 @@ const parseTaskDates = (tasks: any[]) => {
   });
 };
 
-//
 const ScheduleScreen = ({}) => {
   const router = useRouter();
   const dispatch = useDispatch();
@@ -80,58 +77,76 @@ const ScheduleScreen = ({}) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   
+  // 组件挂载状态 - 防止内存泄漏
+  const isMountedRef = useRef(true);
+  
   // 添加当前时间状态用于动态更新进度条
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // 认证检查
   useEffect(() => {
+    let isCancelled = false;
+    
     const checkAuth = async () => {
       try {
         const token = await AsyncStorage.getItem("access_token");
+        if (isCancelled) return;
+        
         if (!token) {
           router.replace("/auth");
           return;
         }
         
         const validation = await validateToken();
+        if (isCancelled) return;
+        
         if (!validation.valid) {
           console.log("Token validation failed:", validation.error);
           router.replace("/auth");
           return;
         }
         
-        setIsAuthenticated(true);
-        
-        // 认证成功后为所有未来任务安排原生通知
-        console.log("认证成功，为所有未来任务安排原生通知...");
-        scheduleAllUpcomingTaskNotifications().then((count) => {
-          console.log(`已为 ${count} 个通知安排了原生调度`);
-        }).catch((error) => {
-          console.error("安排任务通知失败:", error);
-        });
+        if (!isCancelled) {
+          setIsAuthenticated(true);
+          console.log("认证成功");
+        }
         
       } catch (error) {
-        console.error("Auth check failed:", error);
-        router.replace("/auth");
+        if (!isCancelled) {
+          console.error("Auth check failed:", error);
+          router.replace("/auth");
+        }
       } finally {
-        setAuthChecking(false);
+        if (!isCancelled) {
+          setAuthChecking(false);
+        }
       }
     };
     
     checkAuth();
-  }, []);
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [router]);
 
   // 添加定时器来动态更新当前时间，实现进度条实时更新
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentTime(new Date());
+      if (isMountedRef.current) {
+        setCurrentTime(new Date());
+      }
     }, 1000); // 每秒更新一次
 
     return () => clearInterval(timer);
   }, []);
 
-  // 今日任务数据
-  const [scheduleData, setScheduleData] = useState<any[]>([]);
+  // 组件卸载时的清理
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // 新建/编辑任务相关状态
   const [modalVisible, setModalVisible] = useState(false);
@@ -163,20 +178,23 @@ const ScheduleScreen = ({}) => {
   const [tagList, setTagList] = useState<{ id: number; name: string; color?: string }[]>([]);
 
   // scheduleData 操作函数
-  const changeScheduleData = (id: number, property: string, value: any) => {
-    const newData = [...scheduleData];
-    const index = newData.findIndex((item) => item.id === id);
-    if (index === -1) return;
-    newData[index] = { ...newData[index], [property]: value };
-    newData.sort((a, b) => convertTimeToMinutes(a.startTime) - convertTimeToMinutes(b.startTime));
-    setScheduleData(newData);
-  };
+  // 修改任务数据 - 通过 Redux 更新
+  const changeScheduleData = useCallback((id: number, property: string, value: any) => {
+    if (!isMountedRef.current) return;
+    
+    const task = tasks.find((task: any) => task.id === id);
+    if (!task) return;
+    
+    const updatedTask = { ...task, [property]: value };
+    dispatch(updateTaskInStore(updatedTask));
+  }, [tasks, dispatch]);
 
-  // 渲染单个任务块
-  const renderTimeBlock = ({ item }: { item: any }) => {
+  // 渲染单个任务块 - 使用 useCallback 优化
+  const renderTimeBlock = useCallback(({ item }: { item: any }) => {
     const start = item.startTime instanceof Date ? item.startTime : null;
     const end = item.endTime instanceof Date ? item.endTime : null;
     const isNotDone = item.completed === false && end && end <= new Date();
+    const isCompleted = item.completed === true;
     
     // 计算当前进度百分比
     const calculateProgress = () => {
@@ -195,60 +213,184 @@ const ScheduleScreen = ({}) => {
     
     const progressPercentage = calculateProgress();
     
+    // 根据任务状态确定样式
+    const getTaskStyle = () => {
+      if (isCompleted) {
+        return {
+          backgroundColor: "#e8f5e8", // 浅绿色背景
+          borderColor: "#28a745",
+          borderWidth: 2,
+          opacity: 0.8
+        };
+      } else if (isNotDone) {
+        return {
+          backgroundColor: "#ffeaea", // 浅红色背景
+          borderColor: "#dc3545",
+          borderWidth: 2,
+        };
+      } else {
+        return {
+          backgroundColor: "#ffffff", // 白色背景
+          borderColor: "#e9ecef",
+          borderWidth: 1,
+        };
+      }
+    };
+    
     return (
       <Pressable
-        style={[styles.timeBlock, { backgroundColor: "#DEF3FD" }]}
+        style={[
+          styles.timeBlock, 
+          getTaskStyle(),
+          { 
+            marginHorizontal: 8,
+            marginVertical: 6,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 4,
+            elevation: 3,
+          }
+        ]}
         onPress={() => changeScheduleData(item.id, "fold", !item.fold)}
         onLongPress={() => handleEditTask(item)}
       >
         <View style={{ borderRadius: 10 }}>
-          <View style={{ borderRadius: 10, overflow: "hidden", margin: 20 }}>
+          <View style={{ borderRadius: 10, overflow: "hidden", margin: 16 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.timeText}>
-                {start ? start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"} - {end ? end.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"}
-              </Text>
-              <Text style={styles.taskNameText}>{item.name}</Text>
+              {/* 完成状态指示器 */}
+              <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+                <View style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 10,
+                  backgroundColor: isCompleted ? "#28a745" : "#ffffff",
+                  borderWidth: 2,
+                  borderColor: isCompleted ? "#28a745" : "#666666",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 12
+                }}>
+                  {isCompleted && (
+                    <AntDesign name="check" size={12} color="#ffffff" />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[
+                    styles.taskNameText,
+                    isCompleted && { 
+                      textDecorationLine: 'line-through',
+                      color: '#666666',
+                      fontWeight: 'normal'
+                    }
+                  ]}>
+                    {item.name}
+                  </Text>
+                  <Text style={[
+                    styles.timeText,
+                    { fontSize: 12, marginTop: 2 }
+                  ]}>
+                    {start ? start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"} - {end ? end.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"}
+                  </Text>
+                </View>
+              </View>
+              
+              {/* 状态标签 */}
+              <View style={{
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 12,
+                backgroundColor: isCompleted ? "#28a745" : isNotDone ? "#dc3545" : "#007bff"
+              }}>
+                <Text style={{ 
+                  color: "#ffffff", 
+                  fontSize: 10, 
+                  fontWeight: "600"
+                }}>
+                  {isCompleted ? "DONE" : isNotDone ? "OVERDUE" : "TODO"}
+                </Text>
+              </View>
             </View>
             {!item.fold && (
-              <View style={{ marginTop: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <View style={{ flex: 1 }}>
+              <View style={{ 
+                marginTop: 12, 
+                padding: 12,
+                backgroundColor: "rgba(0,0,0,0.05)",
+                borderRadius: 8,
+                borderLeftWidth: 3,
+                borderLeftColor: isCompleted ? "#28a745" : isNotDone ? "#dc3545" : "#007bff"
+              }}>
+                <View style={{ marginBottom: 8 }}>
                   {/* 显示任务详细信息 */}
                   {item.details && typeof item.details === 'object' && (
                     <View>
                       {Object.entries(item.details).map(([key, value]) => (
-                        <Text key={key} style={[styles.eventText, { marginBottom: 2 }]}>
-                          {key}: {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                        <Text key={key} style={[styles.eventText, { marginBottom: 4, fontSize: 13 }]}>
+                          <Text style={{ fontWeight: "600", color: "#495057" }}>{key}:</Text> {typeof value === 'object' ? JSON.stringify(value) : String(value)}
                         </Text>
                       ))}
                     </View>
                   )}
                   {item.details && typeof item.details === 'string' && (
-                    <Text style={styles.eventText}>{item.details}</Text>
+                    <Text style={[styles.eventText, { fontSize: 13 }]}>{item.details}</Text>
                   )}
                   {!item.details && (
-                    <Text style={[styles.eventText, { color: '#999' }]}>No description</Text>
+                    <Text style={[styles.eventText, { color: '#999999', fontSize: 13, fontStyle: 'italic' }]}>No description</Text>
                   )}
                 </View>
+                
+                {/* 进度信息 */}
+                {start && end && (
+                  <View style={{ marginBottom: 8 }}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <Text style={{ fontSize: 12, color: "#666", fontWeight: "500" }}>
+                        Progress: {progressPercentage.toFixed(1)}%
+                      </Text>
+                      <Text style={{ fontSize: 11, color: "#999" }}>
+                        {progressPercentage >= 100 ? "Completed" : progressPercentage > 0 ? "In Progress" : "Not Started"}
+                      </Text>
+                    </View>
+                    {/* 进度条 */}
+                    <View style={{
+                      height: 6,
+                      backgroundColor: "#e9ecef",
+                      borderRadius: 3,
+                      overflow: "hidden"
+                    }}>
+                      <View style={{
+                        height: "100%",
+                        width: `${Math.min(progressPercentage, 100)}%`,
+                        backgroundColor: progressPercentage >= 100 ? "#dc3545" : progressPercentage > 50 ? "#ffc107" : "#28a745",
+                        borderRadius: 3,
+                      }} />
+                    </View>
+                  </View>
+                )}
+                
                 {isNotDone && (
                   <Pressable
-                    style={{ backgroundColor: "#FFA500", borderRadius: 8, paddingVertical: 6, paddingHorizontal: 14, marginLeft: 10 }}
+                    style={{ 
+                      backgroundColor: "#007bff", 
+                      borderRadius: 6, 
+                      paddingVertical: 8, 
+                      paddingHorizontal: 16, 
+                      alignSelf: "flex-start",
+                      shadowColor: "#000",
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.2,
+                      shadowRadius: 2,
+                      elevation: 2,
+                    }}
                     onPress={() => changeScheduleData(item.id, "completed", null)}
                   >
-                    <Text style={{ color: "#fff", fontWeight: "bold" }}>Move to TODO</Text>
+                    <Text style={{ color: "#ffffff", fontWeight: "600", fontSize: 12 }}>Move to TODO</Text>
                   </Pressable>
                 )}
               </View>
             )}
-            {/* 显示进度百分比 */}
-            {!item.fold && start && end && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={{ fontSize: 12, color: "#666" }}>
-                  Progress: {progressPercentage.toFixed(1)}%
-                </Text>
-              </View>
-            )}
           </View>
         </View>
+        
         {/* 动态进度条覆盖层 */}
         <View
           style={{
@@ -257,17 +399,23 @@ const ScheduleScreen = ({}) => {
             left: 0,
             bottom: 0,
             width: `${progressPercentage}%`,
-            backgroundColor: progressPercentage >= 100 ? "rgba(255, 0, 0, 0.3)" : "rgba(0, 0, 0, 0.2)",
+            backgroundColor: isCompleted 
+              ? "rgba(40, 167, 69, 0.15)" 
+              : isNotDone 
+                ? "rgba(220, 53, 69, 0.15)" 
+                : progressPercentage >= 100 
+                  ? "rgba(255, 193, 7, 0.15)" 
+                  : "rgba(0, 123, 255, 0.1)",
             borderRadius: 10,
             overflow: "hidden",
           }}
         />
       </Pressable>
     );
-  };
+  }, [currentTime, changeScheduleData, tasks, dispatch]);
 
-  // 渲染 Tasks Not Done 的任务块 - 添加 Move to TODO 按钮
-  const renderNotDoneTimeBlock = ({ item }: { item: any }) => {
+  // 渲染 Tasks Not Done 的任务块 - 添加 Move to TODO 按钮 - 使用 useCallback 优化
+  const renderNotDoneTimeBlock = useCallback(({ item }: { item: any }) => {
     const start = item.startTime instanceof Date ? item.startTime : null;
     const end = item.endTime instanceof Date ? item.endTime : null;
     
@@ -290,69 +438,141 @@ const ScheduleScreen = ({}) => {
     
     return (
       <Pressable
-        style={[styles.timeBlock, { backgroundColor: "#FEE5E5" }]} // 不同的背景色表示未完成
+        style={[
+          styles.timeBlock, 
+          { 
+            backgroundColor: "#fff5f5", // 更明显的警告背景色
+            borderColor: "#ff6b6b",
+            borderWidth: 2,
+            marginHorizontal: 8,
+            marginVertical: 6,
+            shadowColor: "#ff6b6b",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.2,
+            shadowRadius: 4,
+            elevation: 4,
+          }
+        ]}
         onPress={() => changeScheduleData(item.id, "fold", !item.fold)}
         onLongPress={() => handleEditTask(item)}
       >
         <View style={{ borderRadius: 10 }}>
-          <View style={{ borderRadius: 10, overflow: "hidden", margin: 20 }}>
+          <View style={{ borderRadius: 10, overflow: "hidden", margin: 16 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.timeText}>
-                {start ? start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"} - {end ? end.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"}
-              </Text>
-              <Text style={styles.taskNameText}>{item.name}</Text>
+              {/* 逾期状态指示器 */}
+              <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+                <View style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 10,
+                  backgroundColor: "#ff6b6b",
+                  borderWidth: 2,
+                  borderColor: "#ff6b6b",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 12
+                }}>
+                  <AntDesign name="exclamation" size={12} color="#ffffff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.taskNameText, { color: "#d63031", fontWeight: "600" }]}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.timeText, { fontSize: 12, marginTop: 2, color: "#ff6b6b" }]}>
+                    {start ? start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"} - {end ? end.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"}
+                  </Text>
+                </View>
+              </View>
+              
+              {/* 逾期标签 */}
+              <View style={{
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 12,
+                backgroundColor: "#ff6b6b"
+              }}>
+                <Text style={{ 
+                  color: "#ffffff", 
+                  fontSize: 10, 
+                  fontWeight: "700"
+                }}>
+                  OVERDUE
+                </Text>
+              </View>
             </View>
             {!item.fold && (
-              <View style={{ marginTop: 10 }}>
-                <View style={{ marginBottom: 8 }}>
-                  {/* 显示任务详细信息 */}
-                  {item.details && typeof item.details === 'object' && (
-                    <View>
-                      {Object.entries(item.details).map(([key, value]) => (
-                        <Text key={key} style={[styles.eventText, { marginBottom: 2 }]}>
-                          {key}: {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                        </Text>
-                      ))}
-                    </View>
-                  )}
-                  {item.details && typeof item.details === 'string' && (
-                    <Text style={styles.eventText}>{item.details}</Text>
-                  )}
-                  {!item.details && (
-                    <Text style={[styles.eventText, { color: '#999' }]}>No description</Text>
-                  )}
+              <View style={{ 
+                backgroundColor: "#fff", 
+                borderRadius: 8, 
+                marginTop: 12, 
+                padding: 12,
+                borderWidth: 1,
+                borderColor: "#ffe6e6"
+              }}>
+                <Text style={[styles.eventText, { 
+                  fontSize: 13, 
+                  fontWeight: "500", 
+                  color: "#666",
+                  marginBottom: 4
+                }]}>
+                  Category: {item.category || 'None'}
+                </Text>
+                <Text style={[styles.eventText, { 
+                  fontSize: 13, 
+                  fontWeight: "400", 
+                  color: "#666",
+                  marginBottom: 6,
+                  lineHeight: 18
+                }]}>
+                  Description: {item.content || 'No description'}
+                </Text>
+                
+                {/* 进度显示 */}
+                <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8 }}>
+                  <Text style={{ fontSize: 12, color: "#ff6b6b", fontWeight: "600", marginRight: 8 }}>
+                    Progress: {progressPercentage.toFixed(1)}%
+                  </Text>
+                  <View style={{
+                    flex: 1,
+                    height: 6,
+                    backgroundColor: "#ffebee",
+                    borderRadius: 3,
+                    overflow: "hidden"
+                  }}>
+                    <View style={{
+                      width: `${progressPercentage}%`,
+                      height: "100%",
+                      backgroundColor: "#ff6b6b",
+                      borderRadius: 3
+                    }} />
+                  </View>
                 </View>
-                {/* Tasks Not Done 专用的 Move to TODO 按钮 */}
+                
+                {/* 操作按钮 */}
                 <Pressable
                   style={{ 
-                    backgroundColor: "#4CAF50", 
-                    borderRadius: 8, 
-                    paddingVertical: 8, 
+                    backgroundColor: "#ff6b6b", 
+                    borderRadius: 6, 
+                    paddingVertical: 10, 
                     paddingHorizontal: 16, 
                     alignSelf: 'flex-start',
                     flexDirection: 'row',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    marginTop: 12
                   }}
                   onPress={() => {
                     changeScheduleData(item.id, "completed", null);
                     handleTaskStatusChange(item.id, null);
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "bold", marginRight: 4 }}>Move to TODO</Text>
-                  <Text style={{ color: "#fff" }}>→</Text>
+                  <AntDesign name="arrowleft" size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                  <Text style={{ color: "#ffffff", fontWeight: "600", fontSize: 13 }}>Move to TODO</Text>
                 </Pressable>
-              </View>
-            )}
-            {/* 显示进度百分比 */}
-            {!item.fold && start && end && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={{ fontSize: 12, color: "#666" }}>
-                  Progress: {progressPercentage.toFixed(1)}%
-                </Text>
               </View>
             )}
           </View>
         </View>
+        
         {/* 动态进度条覆盖层 */}
         <View
           style={{
@@ -361,20 +581,20 @@ const ScheduleScreen = ({}) => {
             left: 0,
             bottom: 0,
             width: `${progressPercentage}%`,
-            backgroundColor: progressPercentage >= 100 ? "rgba(255, 0, 0, 0.3)" : "rgba(0, 0, 0, 0.2)",
+            backgroundColor: "rgba(255, 107, 107, 0.2)",
             borderRadius: 10,
             overflow: "hidden",
           }}
         />
       </Pressable>
     );
-  };
+  }, [currentTime, changeScheduleData, tasks, dispatch]);
   const SWIPETHRESHOLD = 0.4 * Dimensions.get("window").width;
   // 渲染滑动操作项（可扩展）
   const renderSwipeItem = () => <View style={{ height: 78 }} />;
 
-  // 重置弹窗表单
-  const resetModalFields = () => {
+  // 重置弹窗表单 - 使用 useCallback 优化
+  const resetModalFields = useCallback(() => {
     setNewTaskName("");
     setNewTaskTags([]);
     setNewTaskStartTime("");
@@ -384,74 +604,96 @@ const ScheduleScreen = ({}) => {
     setNewTaskScheduled("onetime");
     setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
     setShowDatePicker(false);
-  };
+  }, []);
 
   // 拉取 tag 列表和今日任务
   useEffect(() => {
-    getTags().then(res => {
-      if (res && res.data) {
-        setTagList(res.data);
+    let isCancelled = false;
+    
+    Promise.all([
+      getTags(),
+      getGoals(),
+      getTasks()
+    ]).then(([tagsRes, goalsRes, tasksRes]) => {
+      if (isCancelled) return;
+      
+      if (tagsRes && tagsRes.data) {
+        setTagList(tagsRes.data);
       }
-    }).catch(() => {
-      setTagList([]); // 失败兜底
+      
+      if (goalsRes && goalsRes.data) {
+        dispatch(setGoals(goalsRes.data));
+      }
+      
+      if (tasksRes && tasksRes.data) {
+        dispatch(setTasks(tasksRes.data));
+      }
+    }).catch((error) => {
+      if (!isCancelled) {
+        console.error('Failed to fetch data:', error);
+        setTagList([]); // 失败兜底
+      }
     });
     
-    // 获取 goals 数据
-    getGoals().then(res => {
-      if (res && res.data) {
-        dispatch(setGoals(res.data));
-      }
-    }).catch(() => {
-      console.error('Failed to fetch goals');
-    });
-    
-    // 拉取今天的任务并同步 redux
-    // getTasks({ date: todayStr }) 改为 getTasks()，如需后端支持请实现 query
-    getTasks().then(res => {
-      if (res && res.data) {
-        dispatch(setTasks(res.data));
-      }
-    });
+    return () => {
+      isCancelled = true;
+    };
   }, [dispatch]);
 
-  // scheduleData 由 redux tasks 派生
-  useEffect(() => {
+  // scheduleData 由 redux tasks 派生 - 使用 useMemo 优化，支持periodic任务扩展
+  const scheduleData = useMemo(() => {
     if (tasks && Array.isArray(tasks)) {
       const today = new Date();
-      const todayTasks = tasks.filter((task: any) => {
-        const start = task.scheduledParam?.startTime || task.startTime;
-        if (!start) return false;
-        const d = new Date(start);
-        return (
-          d.getFullYear() === today.getFullYear() &&
-          d.getMonth() === today.getMonth() &&
-          d.getDate() === today.getDate()
-        );
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
+      
+      const todayTasks: any[] = [];
+      
+      tasks.forEach((task: any) => {
+        if (task.scheduled === 'periodic') {
+          // 处理periodic任务 - 生成今天的实例
+          const periodicInstances = generatePeriodicTaskInstances(task, todayStart, todayEnd);
+          todayTasks.push(...periodicInstances);
+        } else {
+          // 处理one-time和finishedby任务 - 检查是否在今天
+          const start = task.scheduledParam?.startTime || task.startTime;
+          if (!start) return;
+          const d = new Date(start);
+          if (
+            d.getFullYear() === today.getFullYear() &&
+            d.getMonth() === today.getMonth() &&
+            d.getDate() === today.getDate()
+          ) {
+            todayTasks.push(task);
+          }
+        }
       });
-      setScheduleData(
-        parseTaskDates(todayTasks).map((item: any) => ({
-          ...item,
-          fold: true,
-          editNDelete: false,
-        }))
-      );
-      // 每次任务数据更新时，重新安排所有通知
-      if (isAuthenticated) {
-        scheduleAllUpcomingTaskNotifications().catch(() => {});
-      }
+      
+      return parseTaskDates(todayTasks).map((item: any) => ({
+        ...item,
+        fold: true,
+        editNDelete: false,
+      }));
     }
-  }, [tasks, isAuthenticated]);
+    return [];
+  }, [tasks]);
 
-  const handleTaskStatusChange = (id: number, completed: boolean | null) => {
+  // 任务状态变更处理 - 使用 useCallback 优化
+  const handleTaskStatusChange = useCallback((id: number, completed: boolean | null) => {
+    if (!isMountedRef.current) return;
+    
     // 只 patch 状态，null 视为 undefined
     updateTask(id, { completed: completed === null ? undefined : completed })
-      .then(() => getTasks())
+      .then(() => {
+        if (!isMountedRef.current) return;
+        return getTasks();
+      })
       .then(res => {
-        if (res && res.data) {
-          dispatch(setTasks(res.data));
-        }
+        if (!isMountedRef.current || !res?.data) return;
+        dispatch(setTasks(res.data));
       })
       .catch(error => {
+        if (!isMountedRef.current) return;
         console.error("Failed to update task status:", error);
         // 如果API失败，恢复本地状态
         const originalItem = scheduleData.find(item => item.id === id);
@@ -459,7 +701,7 @@ const ScheduleScreen = ({}) => {
           changeScheduleData(id, "completed", originalItem.completed);
         }
       });
-  };
+  }, [scheduleData, changeScheduleData, dispatch]);
 
   const now = new Date();
   // 修正：completed 只用 boolean
@@ -467,9 +709,13 @@ const ScheduleScreen = ({}) => {
   const notDoneTasks = scheduleData.filter((item: any) => item.completed === false && item.endTime && item.endTime <= now);
   const completedTasks = scheduleData.filter((item: any) => item.completed === true);
 
-  // 编辑任务时填充表单
+  // 编辑任务相关状态
   const [editingTask, setEditingTask] = useState<ScheduleTask | null>(null);
-  const handleEditTask = (task: ScheduleTask) => {
+  
+  // 编辑任务时填充表单 - 使用 useCallback 优化
+  const handleEditTask = useCallback((task: ScheduleTask) => {
+    if (!isMountedRef.current) return;
+    
     setEditingTask(task);
     setNewTaskName(task.name);
     setNewTaskTags(task.tags || []);
@@ -479,9 +725,10 @@ const ScheduleScreen = ({}) => {
     setSelectedGoalId(task.goalId);
     setNewTaskScheduled(task.scheduled || "onetime");
     setNewTaskScheduledParam(task.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+    
     setShowMoreFields(true);
     setModalVisible(true);
-  };
+  }, [tasks]);
 
 
   // 初始化通知通道（仅 Android 需要）
@@ -619,14 +866,15 @@ const ScheduleScreen = ({}) => {
                             display="spinner"
                             maximumDate={newTaskEndTime && newTaskScheduled !== "periodic" ? new Date(newTaskEndTime) : undefined}
                             onChange={(event, selectedDate) => {
-                              if (event.type === "set" && selectedDate) {
+                              if (selectedDate) {
                                 setNewTaskStartTime(selectedDate.toISOString());
                                 if (newTaskEndTime && new Date(selectedDate) > new Date(newTaskEndTime)) {
                                   setNewTaskEndTime(selectedDate.toISOString());
                                 }
-                                setShowStartTimePicker(false); // 自动关闭并选中
-                              } else if (event.type === "dismissed") {
-                                setShowStartTimePicker(false); // 关闭但不选中
+                              }
+                              // 只在用户确认或取消时关闭，滚动调整时不关闭
+                              if ( event.type === "dismissed") {
+                                setShowStartTimePicker(false);
                               }
                             }}
                           />
@@ -650,12 +898,12 @@ const ScheduleScreen = ({}) => {
                               }
                               activeOpacity={0.8}
                             >
-                              <Text style={{ color: newTaskScheduled ? "#222" : "#888" }}>
+                              <Text style={{ color: newTaskScheduled ? "#000000" : "#888888" }}>
                                 {SCHEDULED_OPTIONS.find(
                                   (opt) => opt.value === newTaskScheduled
                                 )?.label || "(Select type)"}
                               </Text>
-                              <AntDesign name="down" size={16} color="#555" />
+                              <Text style={{ color: "#666666", fontSize: 14 }}>▼</Text>
                             </TouchableOpacity>
                             {openDropdown === "scheduled" && (
                               <View style={styles.detailPickerDropdown}>
@@ -665,7 +913,7 @@ const ScheduleScreen = ({}) => {
                                     style={[
                                       styles.detailPickerOption,
                                       newTaskScheduled === opt.value && {
-                                        backgroundColor: "#e6f0ff",
+                                        backgroundColor: "#f8f9fa",
                                       },
                                     ]}
                                     onPress={() => {
@@ -675,7 +923,7 @@ const ScheduleScreen = ({}) => {
                                       setOpenDropdown(null);
                                     }}
                                   >
-                                    <Text style={{ color: "#222" }}>{opt.label}</Text>
+                                    <Text style={{ color: "#000000" }}>{opt.label}</Text>
                                   </TouchableOpacity>
                                 ))}
                               </View>
@@ -722,14 +970,15 @@ const ScheduleScreen = ({}) => {
                                 display="spinner"
                                 maximumDate={newTaskEndTime && newTaskScheduled !== "periodic" ? new Date(newTaskEndTime) : undefined}
                                 onChange={(event, selectedDate) => {
-                                  if (event.type === "set" && selectedDate) {
+                                  if (selectedDate) {
                                     setNewTaskStartTime(selectedDate.toISOString());
                                     if (newTaskEndTime && new Date(selectedDate) > new Date(newTaskEndTime)) {
                                       setNewTaskEndTime(selectedDate.toISOString());
                                     }
-                                    setShowStartTimePicker(false); // 自动关闭并选中
-                                  } else if (event.type === "dismissed") {
-                                    setShowStartTimePicker(false); // 关闭但不选中
+                                  }
+                                  // 只在用户确认或取消时关闭，滚动调整时不关闭
+                                  if (event.type === "dismissed") {
+                                    setShowStartTimePicker(false);
                                   }
                                 }}
                               />
@@ -792,6 +1041,10 @@ const ScheduleScreen = ({}) => {
                                 onChange={(event, selectedDate) => {
                                   if (selectedDate) {
                                     setNewTaskEndTime(selectedDate.toISOString());
+                                  }
+                                  // 只在用户确认或取消时关闭，滚动调整时不关闭
+                                  if (event.type === "dismissed") {
+                                    setShowEndTimePicker(false);
                                   }
                                 }}
                               />
@@ -856,6 +1109,10 @@ const ScheduleScreen = ({}) => {
                                       setNewTaskEndTime(selectedDate.toISOString());
                                     }
                                   }
+                                  // 只在用户确认或取消时关闭，滚动调整时不关闭
+                                  if (event.type === "dismissed") {
+                                    setShowEndTimePicker(false);
+                                  }
                                 }}
                               />
                             )}
@@ -876,14 +1133,14 @@ const ScheduleScreen = ({}) => {
                                 }}
                                 activeOpacity={0.8}
                               >
-                                <Text style={{ color: newTaskScheduledParam.type ? "#222" : "#888" }}>
+                                <Text style={{ color: newTaskScheduledParam.type ? "#000000" : "#888888" }}>
                                   {["daily", "weekly", "monthly", "yearly"].find(
                                     (opt) => opt === newTaskScheduledParam.type
                                   )
                                     ?.replace(/^./, (c) => c.toUpperCase()) ||
                                     "Select frequency"}
                                 </Text>
-                                <AntDesign name="down" size={16} color="#555" />
+                                <Text style={{ color: "#666666", fontSize: 14 }}>▼</Text>
                               </TouchableOpacity>
                               {openDropdown === "freq" && (
                                 <View style={styles.detailPickerDropdown}>
@@ -993,6 +1250,9 @@ const ScheduleScreen = ({}) => {
                                     onChange={(event, selectedDate) => {
                                       if (selectedDate) {
                                         setNewTaskScheduledParam({ ...newTaskScheduledParam, dateOfYear: selectedDate.toISOString() });
+                                      }
+                                      // 只在用户确认或取消时关闭，滚动调整时不关闭
+                                      if ( event.type === "dismissed") {
                                         setShowDatePicker(false);
                                       }
                                     }}
@@ -1090,6 +1350,7 @@ const ScheduleScreen = ({}) => {
                             </TouchableOpacity>
                           </View>
                         </View>
+                        
                         {/* Details Section */}
                         <View style={[styles.detailContainer, { marginBottom: 12 }]}> 
                           <Text style={styles.label}>Details</Text>
@@ -1288,12 +1549,7 @@ const ScheduleScreen = ({}) => {
                                 if (res && res.data) {
                                   dispatch(setTasks(res.data));
                                 }
-                                // 重新安排所有任务通知
-                                return scheduleAllUpcomingTaskNotifications();
-                              })
-                              .then(() => {
-                                // 可选：刷新本地 scheduleData
-                                // setScheduleData(res.data); // 若后端返回格式一致
+                                // 通知调度已在Redux slice中自动处理
                               })
                               .catch(e => Alert.alert("Add Task Failed", String(e)))
                               .finally(() => {
@@ -1340,21 +1596,27 @@ const ScheduleScreen = ({}) => {
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
-        keyExtractor={(item: any) => item.id}
+        keyExtractor={(item: any) => String(item.id)}
         leftActivationValue={SWIPETHRESHOLD}
         onLeftActionStatusChange={(rowData) => {
           if (rowData.value >= SWIPETHRESHOLD) {
-            changeScheduleData(Number(rowData.key), "completed", true);
-            handleTaskStatusChange(Number(rowData.key), true);
-
+            const taskId = (item: any) => item.originalId || item.id;
+            const task = todoTasks.find(t => String(t.id) === rowData.key);
+            if (task) {
+              changeScheduleData(taskId(task), "completed", true);
+              handleTaskStatusChange(taskId(task), true);
+            }
           }
         }}
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           if (rowData.value <= -SWIPETHRESHOLD) {
-            changeScheduleData(Number(rowData.key), "completed", false);
-            handleTaskStatusChange(Number(rowData.key), false);
-
+            const taskId = (item: any) => item.originalId || item.id;
+            const task = todoTasks.find(t => String(t.id) === rowData.key);
+            if (task) {
+              changeScheduleData(taskId(task), "completed", false);
+              handleTaskStatusChange(taskId(task), false);
+            }
           }
         }}
       />
@@ -1365,12 +1627,16 @@ const ScheduleScreen = ({}) => {
         renderItem={renderTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
-        keyExtractor={(item: any) => item.id}
+        keyExtractor={(item: any) => String(item.id)}
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           if (rowData.value <= -SWIPETHRESHOLD) {
-            changeScheduleData(Number(rowData.key), "completed", false);
-            handleTaskStatusChange(Number(rowData.key), false);
+            const taskId = (item: any) => item.originalId || item.id;
+            const task = completedTasks.find(t => String(t.id) === rowData.key);
+            if (task) {
+              changeScheduleData(taskId(task), "completed", false);
+              handleTaskStatusChange(taskId(task), false);
+            }
           }
         }}
       />
@@ -1380,24 +1646,27 @@ const ScheduleScreen = ({}) => {
         renderItem={renderNotDoneTimeBlock}
         closeOnRowPress={true}
         renderHiddenItem={renderSwipeItem}
-        keyExtractor={(item: any) => item.id}
+        keyExtractor={(item: any) => String(item.id)}
         leftActivationValue={SWIPETHRESHOLD}
         onLeftActionStatusChange={(rowData) => {
           if (rowData.value >= SWIPETHRESHOLD) {
-            changeScheduleData(Number(rowData.key), "completed", null);
-            handleTaskStatusChange(Number(rowData.key), null);
+            const taskId = (item: any) => item.originalId || item.id;
+            const task = notDoneTasks.find(t => String(t.id) === rowData.key);
+            if (task) {
+              changeScheduleData(taskId(task), "completed", null);
+              handleTaskStatusChange(taskId(task), null);
+            }
           }
         }}
       />
 
-      {/* Add Task Floating Button - 优化尺寸 */}
+      {/* Add Task Floating Button - Minimalist Style */}
       <TouchableOpacity
         style={styles.fabSmall}
         onPress={() => setModalVisible(true)}
         activeOpacity={0.85}
       >
-        <AntDesign name="plus" size={22} color="#fff" />
-        <Text style={styles.fabTextSmall}>Add Task</Text>
+        <Text style={styles.fabTextSmall}>+ Task</Text>
       </TouchableOpacity>
 
 
@@ -1406,7 +1675,7 @@ const ScheduleScreen = ({}) => {
 };
 // 日历屏幕
 export default function App() {
-  // const [scheduleData, setScheduleData] = useState(mockTasks);
+  // scheduleData 由 redux tasks 派生 - 使用 useMemo 优化
 
   const [markedDates, setMarkedDates] = useState({
     "2025-03-20": {
@@ -1755,15 +2024,15 @@ const styles = StyleSheet.create({
     bottom: 28,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#007bff",
-    borderRadius: 24,
-    paddingVertical: 8,
+    backgroundColor: "#000000",
+    borderRadius: 4,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    elevation: 4,
+    elevation: 2,
     shadowColor: "#000",
-    shadowOpacity: 0.13,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
     zIndex: 100,
   },
   fabText: {
@@ -1774,11 +2043,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   fabTextSmall: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 15,
-    marginLeft: 7,
-    letterSpacing: 0.5,
+    color: "#ffffff",
+    fontWeight: "500",
+    fontSize: 14,
+    letterSpacing: 0.3,
   },
   taskNameText: {
     fontSize: 16,
@@ -1815,6 +2083,9 @@ interface ScheduleTask {
   scheduledParam?: any;
   fold?: boolean;
   editNDelete?: boolean;
+  originalId?: number;  // 用于periodic任务实例的原始任务ID
+  isPeriodicInstance?: boolean;  // 标识是否为periodic任务实例
+  instanceDate?: Date;  // periodic任务实例的日期
 }
 
 

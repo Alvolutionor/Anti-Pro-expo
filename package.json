@@ -19,7 +19,7 @@
     "@mathquis/node-personal-wakeword": "^1.1.1",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "^8.3.0",
-    "@react-native-picker/picker": "^2.11.0",
+    "@react-native-picker/picker": "^2.11.1",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.17",
     "@react-navigation/stack": "^7.2.1",

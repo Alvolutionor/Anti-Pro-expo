@@ -13,11 +13,29 @@ async function getToken() {
 // 通用axios实例
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 10000,
+  timeout: 10000, // 10秒默认超时
+});
+
+// AI专用axios实例 - 更长的超时时间
+const aiApi = axios.create({
+  baseURL: API_BASE,
+  timeout: 180000, // 3分钟超时，适合AI生成
 });
 
 // 请求拦截器自动加token（适配异步）
 api.interceptors.request.use(
+  async (config) => {
+    const token = await getToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// AI专用请求拦截器
+aiApi.interceptors.request.use(
   async (config) => {
     const token = await getToken();
     if (token) {
@@ -39,6 +57,19 @@ api.interceptors.response.use(
       
       // 可以在这里触发跳转到登录页，但需要小心避免循环
       // 这里我们只是清除token，让应用的其他部分处理跳转
+    }
+    return Promise.reject(error);
+  }
+);
+
+// AI专用响应拦截器
+aiApi.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      // Token无效，清除本地存储的token
+      await AsyncStorage.removeItem("access_token");
+      console.log("Token expired or invalid, cleared from storage");
     }
     return Promise.reject(error);
   }
@@ -88,6 +119,7 @@ export interface CreateTaskData {
   goalId?: number;
   tag?: string;
   details?: Record<string, any>;
+  hideFromCalendar?: boolean; // 控制任务是否在日历中显示
 }
 
 export interface TaskOut extends CreateTaskData {
@@ -112,7 +144,7 @@ export interface TaskOut extends CreateTaskData {
   };
   tags?: number[]; // 修正为 id 数组
   details?: Record<string, any>;
-
+  hideFromCalendar?: boolean; // 控制任务是否在日历中显示
 }
 
 export interface CreateTagData {
@@ -249,9 +281,9 @@ export async function removeTagFromTask(taskId: number, tagId: number) {
   return api.delete(`/tasks/${taskId}/tags/${tagId}`);
 }
 
-// 21. AI function call
+// 21. AI function call - 使用长超时
 export async function aiFunctionCall(functionName: string, args: any) {
-  return api.post("/ai/function_call", {
+  return aiApi.post("/ai/function_call", {
     function: functionName,
     arguments: args,
   });
@@ -260,6 +292,77 @@ export async function aiFunctionCall(functionName: string, args: any) {
 // 22. 获取function call支持的所有函数
 export async function getFunctionList() {
   return api.get("/ai/function_list");
+}
+
+// 23. AI预览任务拆解（仅获取ChatGPT结果，不创建任务）- 使用长超时
+export async function aiPreviewTasks(input: string) {
+  return aiApi.post("/ai/preview_tasks", { input });
+}
+
+// 24. AI智能创建Goal+Task - 使用长超时
+export async function aiSmartCreate(input: string) {
+  return aiApi.post("/ai/smart_create", { input });
+}
+
+// 25. 从预览数据创建目标和任务 - 使用长超时
+export async function aiCreateFromPreview(goalName: string, goalDescription: string, tasks: AITaskPreview[]) {
+  return aiApi.post("/ai/create_from_preview", {
+    goal_name: goalName,
+    goal_description: goalDescription,
+    tasks: tasks
+  });
+}
+
+// AI预览和智能创建的响应类型定义
+export interface AITaskPreview {
+  name: string;
+  description: string;
+  priority: number;
+  dayPoints?: number | null;
+  completed: boolean;
+  scheduled: string;
+  scheduledParam: {
+    estimatedDays?: number;
+    startTime?: string;
+    endTime?: string;
+    [key: string]: any;
+  };
+}
+
+export interface AIPreviewResponse {
+  goal_preview: {
+    name: string;
+    description: string;
+  };
+  tasks_preview: AITaskPreview[];
+  total_tasks: number;
+  ai_response: {
+    raw_content: string;
+    model: string;
+    usage?: any;
+    created: number;
+  };
+}
+
+export interface AISmartCreateResponse {
+  goal: {
+    id: number;
+    name: string;
+    description: string;
+  };
+  tasks: {
+    id: number;
+    name: string;
+    priority: number;
+    scheduledParam: any;
+    goalId: number;
+  }[];
+  ai_response: {
+    raw_content: string;
+    model: string;
+    usage?: any;
+    created: number;
+  };
 }
 
 // utils/api.ts 或 types.ts
@@ -298,6 +401,7 @@ export interface TaskOut {
   };
   tag?: string;
   details?: Record<string, any>;
+  hideFromCalendar?: boolean; // 控制任务是否在日历中显示
 }
 
 export default api;

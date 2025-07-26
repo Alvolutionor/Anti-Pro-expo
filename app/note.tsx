@@ -203,7 +203,7 @@ const ScheduleScreen = ({}) => {
   const renderTimeBlock = ({ item }) => {
     return (
       <Pressable
-        style={[styles.timeBlock, { backgroundColor: "#DEF3FD" }]} //
+        style={[styles.timeBlock, { backgroundColor: "#f8f9fa" }]} //
         onPress={() => {
           changeScheduleData(item.id, "fold", !item.fold);
         }}
@@ -463,7 +463,7 @@ const ScheduleScreen = ({}) => {
                           <TouchableOpacity
                             style={[
                               styles.dateTimePicker,
-                              !newTaskStartTime && { backgroundColor: "#ddd" }, // 禁用时改变背景色
+                              !newTaskStartTime && { backgroundColor: "#dddddd" }, // 禁用时改变背景色
                             ]}
                             onPress={() => {
                               if (!newTaskStartTime) {
@@ -520,7 +520,7 @@ const ScheduleScreen = ({}) => {
                             <Text style={styles.dateTimeText}>
                               {newTaskEvent || "Select a Tag"}
                             </Text>
-                            <AntDesign name="down" size={16} color="#555" />
+                            <Text style={{fontSize: 16}}>⌄</Text>
                           </TouchableOpacity>
                           {showEventPicker && (
                             <View style={styles.eventPicker}>
@@ -557,7 +557,7 @@ const ScheduleScreen = ({}) => {
                                 <Text style={styles.dropdownText}>
                                   {detail.key || "Select Attribute"}
                                 </Text>
-                                <AntDesign name="down" size={16} color="#555" />
+                                <Text style={{fontSize: 16}}>⌄</Text>
                               </TouchableOpacity>
                               {detail.showDropdown && (
                                 <View style={styles.dropdownMenu}>
@@ -730,7 +730,7 @@ export default function App() {
 
   const [markedDates, setMarkedDates] = useState({
     "2025-03-20": {
-      periods: [{ startingDay: true, endingDay: true, color: "#4a90e2" }],
+      periods: [{ startingDay: true, endingDay: true, color: "#666666" }],
     },
   });
 
@@ -748,7 +748,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "#f8f9fa",
   },
   screen: {
     flex: 1,

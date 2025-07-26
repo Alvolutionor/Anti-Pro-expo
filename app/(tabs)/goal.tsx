@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -30,6 +30,12 @@ import {
   deleteTask,
   updateTask,
   validateToken,
+  aiPreviewTasks,
+  aiSmartCreate,
+  aiCreateFromPreview,
+  AIPreviewResponse,
+  AISmartCreateResponse,
+  AITaskPreview,
 } from "../../utils/api";
 import {
   setGoals,
@@ -41,10 +47,8 @@ import { setTasks, deleteTask as deleteTaskRedux } from "../../store/taskSlice";
 import AntDesign from "@expo/vector-icons/AntDesign";
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getTags } from '../../utils/api';
-import { scheduleTaskNotification as utilScheduleTaskNotification, scheduleAllUpcomingTaskNotifications, testThirtySecondTaskNotification, sendSimpleNotification } from '../../utils/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import VoiceInputButton from '../../components/VoiceInputButton';
 
 export default function GoalsManager() {
   const router = useRouter();
@@ -52,7 +56,10 @@ export default function GoalsManager() {
   const goals = useSelector((state: RootState) => state.goal.goals);
   const tasks = useSelector((state: RootState) => state.task.tasks);
   
-  // 添加认证状态检查
+  // 组件挂载状�?- 防止内存泄漏
+  const isMountedRef = useRef(true);
+  
+  // 添加认证状态检�?
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -64,53 +71,86 @@ export default function GoalsManager() {
   // 新增互斥下拉菜单控制
   const [openDropdown, setOpenDropdown] = useState<null | 'scheduled' | 'scheduledParam'>(null);
 
-  const fetchGoalsAndTasks = async () => {
+  const fetchGoalsAndTasks = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
     setLoading(true);
     try {
       const [goalsRes, tasksRes] = await Promise.all([getGoals(), getTasks()]);
-      dispatch(setGoals(goalsRes.data));
-      dispatch(setTasks(tasksRes.data));
+      
+      // 只有在组件仍然挂载时才更新状�?
+      if (isMountedRef.current) {
+        dispatch(setGoals(goalsRes.data));
+        dispatch(setTasks(tasksRes.data));
+      }
     } catch (e) {
-      Alert.alert("Failed to load data", String(e));
+      if (isMountedRef.current) {
+        Alert.alert("Failed to load data", String(e));
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [dispatch]);
 
-  // 认证检查
+  // 认证检�?
   useEffect(() => {
+    let isCancelled = false;
+    
     const checkAuth = async () => {
       try {
         const token = await AsyncStorage.getItem("access_token");
+        if (isCancelled) return;
+        
         if (!token) {
           router.replace("/auth");
           return;
         }
         
         const validation = await validateToken();
+        if (isCancelled) return;
+        
         if (!validation.valid) {
           console.log("Token validation failed:", validation.error);
           router.replace("/auth");
           return;
         }
         
-        setIsAuthenticated(true);
+        if (!isCancelled) {
+          setIsAuthenticated(true);
+        }
       } catch (error) {
-        console.error("Auth check failed:", error);
-        router.replace("/auth");
+        if (!isCancelled) {
+          console.error("Auth check failed:", error);
+          router.replace("/auth");
+        }
       } finally {
-        setAuthChecking(false);
+        if (!isCancelled) {
+          setAuthChecking(false);
+        }
       }
     };
     
     checkAuth();
-  }, []);
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     if (isAuthenticated) {
       fetchGoalsAndTasks();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, fetchGoalsAndTasks]);
+
+  // 组件卸载时的清理
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const openAddModal = () => {
     setEditingGoal(null);
@@ -172,7 +212,7 @@ export default function GoalsManager() {
     ]);
   };
 
-  // Add Task 相关 state（完全复用 index.tsx 结构）
+  // Add Task 相关 state（完全复�?index.tsx 结构�?
   const [addTaskModalVisible, setAddTaskModalVisible] = useState(false);
   const [addingTaskGoalId, setAddingTaskGoalId] = useState<number | null>(null);
   const [newTaskName, setNewTaskName] = useState("");
@@ -192,20 +232,29 @@ export default function GoalsManager() {
   // Edit Task 相关 state
   const [editTaskModalVisible, setEditTaskModalVisible] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskOut | null>(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState(Date.now()); // 添加时间戳来强制重新渲染
 
   // 拉取 tag 列表
   useEffect(() => {
+    let isCancelled = false;
+    
     getTags().then(res => {
-      if (res && res.data) {
+      if (!isCancelled && res && res.data) {
         setTagList(res.data);
       }
     }).catch(() => {
-      setTagList([]);
+      if (!isCancelled) {
+        setTagList([]);
+      }
     });
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   // Add Task 逻辑
-  const handleAddTask = async () => {
+  const handleAddTask = useCallback(async () => {
     if (!newTaskName.trim()) {
       Alert.alert("Task name is required");
       return;
@@ -214,6 +263,8 @@ export default function GoalsManager() {
       Alert.alert("No goal selected");
       return;
     }
+    if (!isMountedRef.current) return;
+    
     setSavingTask(true);
     try {
       const data = {
@@ -236,29 +287,37 @@ export default function GoalsManager() {
         },
       };
       await createTask(data);
+      
+      if (!isMountedRef.current) return;
+      
       // 刷新 tasks
       const tasksRes = await getTasks();
-      dispatch(setTasks(tasksRes.data));
-      // 重新安排所有任务通知
-      scheduleAllUpcomingTaskNotifications().catch(console.error);
-      setAddTaskModalVisible(false);
-      setNewTaskName("");
-      setNewTaskTags([]);
-      setNewTaskStartTime("");
-      setNewTaskEndTime("");
-      setDetails([{ key: "desc", value: "" }]);
-      setNewTaskScheduled("onetime");
-      setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
-      setOpenDropdown(null);
-      setAddingTaskGoalId(null);
+      if (isMountedRef.current) {
+        dispatch(setTasks(tasksRes.data));
+        // 通知调度已在Redux slice中自动处理
+        setAddTaskModalVisible(false);
+        setNewTaskName("");
+        setNewTaskTags([]);
+        setNewTaskStartTime("");
+        setNewTaskEndTime("");
+        setDetails([{ key: "desc", value: "" }]);
+        setNewTaskScheduled("onetime");
+        setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+        setOpenDropdown(null);
+        setAddingTaskGoalId(null);
+      }
     } catch (e) {
-      Alert.alert("Failed to add task", String(e));
+      if (isMountedRef.current) {
+        Alert.alert("Failed to add task", String(e));
+      }
     } finally {
-      setSavingTask(false);
+      if (isMountedRef.current) {
+        setSavingTask(false);
+      }
     }
-  };
-    // renderGoal 任务卡片加 fold/展开按钮
-  const handleDeleteTask = async (taskId: number) => {
+  }, [newTaskName, addingTaskGoalId, newTaskTags, details, newTaskScheduled, newTaskScheduledParam, newTaskStartTime, newTaskEndTime, dispatch]);
+    // renderGoal 任务卡片�?fold/展开按钮
+  const handleDeleteTask = useCallback(async (taskId: number) => {
     const task = tasks.find(t => t.id === taskId);
     Alert.alert(
       "Delete Task", 
@@ -269,23 +328,33 @@ export default function GoalsManager() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            if (!isMountedRef.current) return;
+            
             try {
               await deleteTask(taskId);
-              // 立即更新Redux状态
+              
+              if (!isMountedRef.current) return;
+              
+              // 立即更新Redux状�?
               dispatch(deleteTaskRedux(taskId));
-              // 强制刷新任务列表以确保删除生效
+              // 强制刷新任务列表以确保删除生�?
               const tasksRes = await getTasks();
-              dispatch(setTasks(tasksRes.data));
-              // 重新安排所有任务通知
-              scheduleAllUpcomingTaskNotifications().catch(console.error);
+              if (isMountedRef.current) {
+                dispatch(setTasks(tasksRes.data));
+                // 更新时间戳来强制重新渲染
+                setLastUpdateTime(Date.now());
+                // 通知调度已在Redux slice中自动处理
+              }
             } catch (e) {
-              Alert.alert('Failed to delete task', String(e));
+              if (isMountedRef.current) {
+                Alert.alert('Failed to delete task', String(e));
+              }
             }
           },
         },
       ]
     );
-  };
+  }, [tasks, dispatch]);
 
   // 长按任务操作菜单
   const handleLongPressTask = (task: TaskOut) => {
@@ -301,8 +370,7 @@ export default function GoalsManager() {
               await updateTask(task.id, { ...task, completed: !task.completed });
               const tasksRes = await getTasks();
               dispatch(setTasks(tasksRes.data));
-              // 重新安排所有任务通知（完成状态变化会影响通知安排）
-              scheduleAllUpcomingTaskNotifications().catch(console.error);
+              // 通知调度已在Redux slice中自动处理
             } catch (e) {
               Alert.alert('Failed to update task', String(e));
             }
@@ -311,20 +379,15 @@ export default function GoalsManager() {
         {
           text: "Edit",
           onPress: () => {
+            // 使用模态框编辑任务
             setEditingTask(task);
             setNewTaskName(task.name);
-            setNewTaskTags(Array.isArray(task.tags) ? task.tags.map(t => typeof t === 'number' ? t : Number(t)) : []);
+            setNewTaskTags(task.tags || []);
             setNewTaskStartTime(task.scheduledParam?.startTime || "");
             setNewTaskEndTime(task.scheduledParam?.endTime || "");
             setNewTaskScheduled(task.scheduled || "onetime");
             setNewTaskScheduledParam(task.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
-            // 设置详情字段
-            if (task.details && typeof task.details === 'object') {
-              const detailsArray = Object.entries(task.details).map(([key, value]) => ({ key, value: String(value) }));
-              setDetails(detailsArray.length > 0 ? detailsArray : [{ key: "desc", value: "" }]);
-            } else {
-              setDetails([{ key: "desc", value: "" }]);
-            }
+            setDetails(task.details ? Object.entries(task.details).map(([key, value]) => ({ key, value: String(value) })) : [{ key: "desc", value: "" }]);
             setEditTaskModalVisible(true);
           }
         },
@@ -368,8 +431,7 @@ export default function GoalsManager() {
       // 刷新任务列表
       const tasksRes = await getTasks();
       dispatch(setTasks(tasksRes.data));
-      // 重新安排所有任务通知
-      scheduleAllUpcomingTaskNotifications().catch(console.error);
+      // 通知调度已在Redux slice中自动处理
       setEditTaskModalVisible(false);
       setEditingTask(null);
       // 重置表单
@@ -387,15 +449,15 @@ export default function GoalsManager() {
     }
   };
 
-  // 在渲染目录前，构造一个包含"无目标任务"的假 Goal 列表
-  const unassignedTasks = tasks.filter((t: TaskOut) => t.goalId == null);
-  const displayGoals: GoalOut[] = [
-    { id: -1, name: '无目标任务', description: '', achieved: false, lifePoints: undefined, priority: undefined, userId: 0, isDeleted: false, createdAt: '', updatedAt: '' },
+  // 在渲染目录前，构造一个包�?无目标任�?的假 Goal 列表
+  const unassignedTasks = useMemo(() => tasks.filter((t: TaskOut) => t.goalId == null), [tasks]);
+  const displayGoals: GoalOut[] = useMemo(() => [
+    { id: -1, name: 'Unassigned Tasks', description: '', achieved: false, lifePoints: undefined, priority: undefined, userId: 0, isDeleted: false, createdAt: '', updatedAt: '' },
     ...goals
-  ];
+  ], [goals]);
 
-  const renderGoal = ({ item }: { item: GoalOut }) => {
-    // 区分普通 goal 和“无目标任务”节点
+  const renderGoal = useCallback(({ item }: { item: GoalOut }) => {
+    // 区分普�?goal 和“无目标任务”节�?
     const goalTasks: TaskOut[] = item.id === -1
       ? unassignedTasks
       : tasks.filter((t: TaskOut) => t.goalId === item.id);
@@ -405,22 +467,22 @@ export default function GoalsManager() {
         <TouchableOpacity
           onPress={() => {
             setExpandedGoalId(expanded ? null : item.id);
-            // 当展开goal时，收起所有任务
+            // 当展开goal时，收起所有任�?
             if (!expanded) {
               setTaskFoldMap({});
             }
           }}
           style={{ flexDirection: 'row', alignItems: 'center' }}
         >
-          <AntDesign
-            name={expanded ? 'down' : 'right'}
-            size={18}
-            color="#007bff"
+          <AntDesign 
+            name={expanded ? "down" : "right"} 
+            size={16} 
+            color="#000000" 
             style={{ marginRight: 8 }}
           />
           <View style={{ flex: 1 }}>
             <Text style={styles.goalTitle}>
-              {item.id === -1 ? '无目标任务' : item.name}
+              {item.id === -1 ? 'Unassigned Tasks' : item.name}
             </Text>
             {item.description ? (
               <Text style={styles.goalDesc}>{item.description}</Text>
@@ -446,7 +508,7 @@ export default function GoalsManager() {
               Tasks:
             </Text>
             {goalTasks.length === 0 ? (
-              <Text style={{ color: "#888", marginBottom: 8, marginLeft: 18 }}>
+              <Text style={{ color: "#666666", marginBottom: 8, marginLeft: 18 }}>
                 No tasks for this goal.
               </Text>
             ) : (
@@ -455,22 +517,54 @@ export default function GoalsManager() {
                 <FlatList
                   data={goalTasks}
                   keyExtractor={(task) => task.id.toString()}
+                  extraData={[tasks.length, lastUpdateTime]} // 添加时间戳来强制FlatList重新渲染
                   renderItem={({ item: task }) => {
                     let startTime = task.scheduledParam?.startTime;
                     let endTime = task.scheduledParam?.endTime;
                     // 默认所有任务都是折叠的，除非在 taskFoldMap 中明确设置为 false
                     const folded = taskFoldMap[task.id] !== false;
                     return (
-                      <View key={task.id} style={styles.taskCardTree}>
+                      <View key={task.id} style={[
+                        styles.taskCardTree,
+                        task.completed && { backgroundColor: "#f8f9fa", opacity: 0.7 }
+                      ]}>
                         <TouchableOpacity
                           onPress={() => setTaskFoldMap(m => ({ ...m, [task.id]: !folded }))}
                           onLongPress={() => handleLongPressTask(task)}
                           delayLongPress={500}
                           style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}
                         >
-                          <AntDesign name={folded ? 'right' : 'down'} size={14} color="#007bff" style={{ marginRight: 4 }} />
-                          <Text style={styles.taskTitle}>{task.name}</Text>
-                          <Text style={styles.taskHint}>• Long press for options</Text>
+                          <AntDesign 
+                            name={folded ? "down" : "up"} 
+                            size={12} 
+                            color="#666666" 
+                            style={{ marginRight: 6 }}
+                          />
+                          <View style={{
+                            width: 16,
+                            height: 16,
+                            borderRadius: 8,
+                            backgroundColor: task.completed ? "#28a745" : "#ffffff",
+                            borderWidth: 2,
+                            borderColor: task.completed ? "#28a745" : "#666666",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 8
+                          }}>
+                            {task.completed && (
+                              <AntDesign name="check" size={8} color="#ffffff" />
+                            )}
+                          </View>
+                          <Text style={[
+                            styles.taskTitle,
+                            task.completed && { 
+                              textDecorationLine: 'line-through',
+                              color: '#666666'
+                            }
+                          ]}>
+                            {task.name}
+                          </Text>
+                          <Text style={styles.taskHint}>Long press for options</Text>
                         </TouchableOpacity>
                         {!folded && (
                           <>
@@ -486,14 +580,14 @@ export default function GoalsManager() {
                                 Priority: {task.priority}
                               </Text>
                             )}
-                            {/* 任务卡片展示标签名 */}
+                            {/* 任务卡片展示标签�?*/}
                             {Array.isArray(task.tags) && task.tags.length > 0 && (
                               <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
                                 {task.tags.map((tid: any) => {
                                   const tagId = typeof tid === 'number' ? tid : Number(tid);
                                   const tag = tagList.find(t => t.id === tagId);
                                   return tag ? (
-                                    <View key={tagId} style={{ backgroundColor: tag.color || '#007bff', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, marginRight: 6, marginBottom: 2 }}>
+                                    <View key={tagId} style={{ backgroundColor: tag.color || '#666666', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2, marginRight: 6, marginBottom: 2 }}>
                                       <Text style={{ color: '#fff', fontSize: 12 }}>{tag.name}</Text>
                                     </View>
                                   ) : null;
@@ -504,12 +598,12 @@ export default function GoalsManager() {
                             <TouchableOpacity
                               style={{ marginTop: 6, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center' }}
                               onPress={() => {
-                                // TODO: 打开标签多选弹窗，调用 updateTask 只更新 tags 字段
-                                Alert.alert('Add Tag', '标签添加功能开发中，可在 AddTaskModal 选择标签');
+                                // TODO: 打开标签多选弹窗，调用 updateTask 只更新tags 字段
+                                Alert.alert('Add Tag', 'Tag feature is under development, you can select tags in AddTaskModal');
                               }}
                             >
-                              <AntDesign name="tags" size={16} color="#007bff" style={{ marginRight: 4 }} />
-                              <Text style={{ color: '#007bff', fontSize: 13 }}>添加标签</Text>
+                              <AntDesign name="plus" size={14} color="#000000" style={{ marginRight: 4 }} />
+                              <Text style={{ color: '#000000', fontSize: 13 }}>Add Tag</Text>
                             </TouchableOpacity>
                           </>
                         )}
@@ -519,6 +613,7 @@ export default function GoalsManager() {
                   showsVerticalScrollIndicator={false}
                   style={{ backgroundColor: 'transparent' }}
                   contentContainerStyle={{ paddingBottom: 0 }}
+                  nestedScrollEnabled={true} // 允许嵌套滚动
                 />
               </View>
             )}
@@ -530,8 +625,8 @@ export default function GoalsManager() {
                 setAddTaskModalVisible(true);
               }}
             >
-              <AntDesign name="pluscircleo" size={18} color="#007bff" style={{ marginRight: 6 }} />
-              <Text style={{ color: '#007bff', fontWeight: 'bold' }}>Add Task</Text>
+              <AntDesign name="plus" size={16} color="#000000" style={{ marginRight: 6 }} />
+              <Text style={{ color: '#000000', fontWeight: '500' }}>Add Task</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -545,7 +640,7 @@ export default function GoalsManager() {
         </View>
       </View>
     );
-  };
+  }, [unassignedTasks, tasks, expandedGoalId, taskFoldMap, tagList, handleLongPressTask]);
 
   // Add Goal 弹窗相关 state
   const [addGoalVisible, setAddGoalVisible] = useState(false);
@@ -555,6 +650,21 @@ export default function GoalsManager() {
   const [newGoalLifePoints, setNewGoalLifePoints] = useState("");
   const [newGoalPriority, setNewGoalPriority] = useState("");
   const [addingGoal, setAddingGoal] = useState(false);
+  
+  // 选项卡状�?- "manual" �?"ai"
+  const [activeTab, setActiveTab] = useState<"manual" | "ai">("ai");
+
+  // AI 生成相关 state（集成到Add Goal中）
+  const [aiInput, setAiInput] = useState("");
+  const [aiPreviewData, setAiPreviewData] = useState<AIPreviewResponse | null>(null);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const [isCreatingFromPreview, setIsCreatingFromPreview] = useState(false);
+  const [editableTasksPreview, setEditableTasksPreview] = useState<AITaskPreview[]>([]);
+  
+  // AI 生成参数
+  const [aiGoalPriority, setAiGoalPriority] = useState("3");
+  const [aiGoalLifePoints, setAiGoalLifePoints] = useState("");
+  const [aiGoalDescription, setAiGoalDescription] = useState("");
 
   // Add Goal 逻辑
   const handleAddGoal = async () => {
@@ -587,12 +697,101 @@ export default function GoalsManager() {
     }
   };
 
-  // AddTaskModal 组件，参考 index.tsx 的 startTime/endTime 显示逻辑和 timepicker UI
+  // AI 生成预览逻辑 - 添加超时和重试机�?
+  const handleAIPreview = useCallback(async () => {
+    if (!aiInput.trim()) {
+      Alert.alert("Please enter goal description");
+      return;
+    }
+    if (!isMountedRef.current) return;
+    
+    setIsGeneratingPreview(true);
+    try {
+      // 添加超时控制和重试逻辑
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('AI generation timeout, please retry')), 240000) // 4 minutes timeout
+      );
+      
+      const res = await Promise.race([
+        aiPreviewTasks(aiInput),
+        timeoutPromise
+      ]) as any;
+      
+      if (isMountedRef.current && res) {
+        setAiPreviewData(res.data);
+        setEditableTasksPreview(res.data.tasks_preview);
+      }
+    } catch (e) {
+      if (isMountedRef.current) {
+        console.error('AI Preview Error:', e);
+        Alert.alert("AI generation failed", `${String(e)}\n\nPlease check network connection and retry`);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsGeneratingPreview(false);
+      }
+    }
+  }, [aiInput]);
+
+  // 从预览创建实际的目标和任�?
+  const handleCreateFromPreview = useCallback(async () => {
+    if (!aiPreviewData || !isMountedRef.current) return;
+    
+    setIsCreatingFromPreview(true);
+    try {
+      // 使用新的接口，传递修改后的任务数�?
+      const res = await aiCreateFromPreview(
+        aiPreviewData.goal_preview.name,
+        aiPreviewData.goal_preview.description,
+        editableTasksPreview
+      );
+      
+      if (!isMountedRef.current) return;
+      
+      dispatch(addGoal(res.data.goal));
+      await fetchGoalsAndTasks(); // 刷新任务列表
+      
+      if (isMountedRef.current) {
+        setAddGoalVisible(false);
+        resetAIModal();
+        setNewGoalName("");
+        setNewGoalDesc("");
+        setNewGoalAchieved(false);
+        setNewGoalLifePoints("");
+        setNewGoalPriority("");
+        Alert.alert("Success", "Goal and tasks created!");
+      }
+    } catch (e) {
+      if (isMountedRef.current) {
+        Alert.alert("Creation failed", String(e));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsCreatingFromPreview(false);
+      }
+    }
+  }, [aiPreviewData, editableTasksPreview, dispatch, fetchGoalsAndTasks]);
+
+  // 重置AI模态框
+  const resetAIModal = () => {
+    setAiInput("");
+    setAiPreviewData(null);
+    setEditableTasksPreview([]);
+    setIsGeneratingPreview(false);
+    setIsCreatingFromPreview(false);
+    setAiGoalPriority("3");
+    setAiGoalLifePoints("");
+    setAiGoalDescription("");
+    setActiveTab("ai");
+  };
+
+  // AddTaskModal 组件，参�?index.tsx �?startTime/endTime 显示逻辑�?timepicker UI
   function AddTaskModal({ visible, goalId, onClose, onSuccess, isEdit = false, initialData }: {
     visible: boolean; goalId: number | null; onClose: () => void;
     onSuccess: () => void; isEdit?: boolean; initialData?: {
       name?: string; tags?: number[]; startTime?: string; endTime?: string;
       scheduled?: string; scheduledParam?: any; details?: { key: string; value: string; }[];
+      completed?: boolean;
     };
   }) {
     const dispatch = useDispatch<AppDispatch>();
@@ -611,8 +810,9 @@ export default function GoalsManager() {
     const [tagList, setTagList] = useState<{ id: number; name: string; color?: string }[]>([]);
     const [savingTask, setSavingTask] = useState(false);
     const [localNewTaskTags, setLocalNewTaskTags] = useState<number[]>(initialData?.tags || []);
+    const [newTaskCompleted, setNewTaskCompleted] = useState(initialData?.completed || false);
 
-    // 当 initialData 变化时更新状态
+    // �?initialData 变化时更新状�?
     useEffect(() => {
       if (isEdit && initialData) {
         setNewTaskName(initialData.name || "");
@@ -622,20 +822,29 @@ export default function GoalsManager() {
         setNewTaskScheduled(initialData.scheduled || "onetime");
         setNewTaskScheduledParam(initialData.scheduledParam || { type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
         setLocalNewTaskTags(initialData.tags || []);
+        setNewTaskCompleted(initialData.completed || false);
       }
     }, [isEdit, initialData]);
 
     useEffect(() => {
+      let isCancelled = false;
+      
       getTags().then(res => {
-        if (res && res.data) {
+        if (!isCancelled && res && res.data) {
           setTagList(res.data);
         }
       }).catch(() => {
-        setTagList([]);
+        if (!isCancelled) {
+          setTagList([]);
+        }
       });
+
+      return () => {
+        isCancelled = true;
+      };
     }, []);
 
-    // 详情字段动态增删
+    // 详情字段动态增�?
     const handleDetailChange = (idx: number, value: string) => {
       setNewTaskDetails(details => details.map((d, i) => i === idx ? { ...d, value } : d));
     };
@@ -646,10 +855,10 @@ export default function GoalsManager() {
       setNewTaskDetails(details => details.filter((_, i) => i !== idx));
     };
 
-    // index.tsx 逻辑：不同 scheduled 类型下，start/end time 的显示和 picker 类型
-    // onetime: 显示 start/end，均为 datetime picker
-    // periodic: 只显示 start（time picker），不显示 end
-    // finishedby: 只显示 end（datetime picker），不显示 start
+    // index.tsx 逻辑：不�?scheduled 类型下，start/end time 的显示和 picker 类型
+    // onetime: 显示 start/end，均�?datetime picker
+    // periodic: 只显�?start（time picker），不显�?end
+    // finishedby: 只显�?end（datetime picker），不显�?start
 
     const handleAddTask = async () => {
       if (!newTaskName.trim()) {
@@ -666,6 +875,7 @@ export default function GoalsManager() {
           name: newTaskName,
           tags: localNewTaskTags,
           goalId: goalId || undefined,
+          completed: newTaskCompleted,
           details: details.reduce((acc: Record<string, any>, detail) => {
             if (!detail.key) {
               acc['desc'] = detail.value;
@@ -689,8 +899,7 @@ export default function GoalsManager() {
           await createTask(data);
           const tasksRes = await getTasks();
           dispatch(setTasks(tasksRes.data));
-          // 重新安排所有任务通知
-          scheduleAllUpcomingTaskNotifications().catch(console.error);
+          // 通知调度已在Redux slice中自动处理
           onSuccess();
           handleClose();
         }
@@ -710,6 +919,7 @@ export default function GoalsManager() {
       setNewTaskDetails([{ key: "desc", value: "" }]);
       setNewTaskScheduled("onetime");
       setNewTaskScheduledParam({ type: "", daysOfWeek: [], daysOfMonth: [], dateOfYear: "" });
+      setNewTaskCompleted(false);
       setModalOpenDropdown(null);
       setShowStartTimePicker(false);
       setShowEndTimePicker(false);
@@ -724,25 +934,18 @@ export default function GoalsManager() {
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback onPress={() => { }}>
               <View style={styles.modalContent}>
-                <ScrollView keyboardShouldPersistTaps="handled">
+                <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled={true}>
                   <Text style={styles.modalTitle}>{isEdit ? "Edit Task" : "Add Task"}</Text>
                   
-                  {/* Task Name Input with Voice Recognition */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+                  {/* Task Name Input */}
+                  <View style={{ marginBottom: 12 }}>
                     <TextInput
-                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      style={[styles.input, { marginBottom: 0 }]}
                       placeholder="Task Name (e.g. Read a book)"
                       value={newTaskName}
                       onChangeText={setNewTaskName}
                       maxLength={40}
                       autoCapitalize="sentences"
-                    />
-                    <VoiceInputButton
-                      onTextReceived={(text) => {
-                        setNewTaskName(text);
-                      }}
-                      placeholder="语音"
-                      style={{ minWidth: 70 }}
                     />
                   </View>
                   {/* Scheduled 下拉选择 - 统一下拉菜单风格 */}
@@ -754,7 +957,7 @@ export default function GoalsManager() {
                         onPress={() => setModalOpenDropdown(modalOpenDropdown === "scheduled" ? null : "scheduled")}
                         activeOpacity={0.8}
                       >
-                        <Text style={{ color: newTaskScheduled ? "#222" : "#888" }}>
+                        <Text style={{ color: newTaskScheduled ? "#000000" : "#666666" }}>
                           {newTaskScheduled.charAt(0).toUpperCase() + newTaskScheduled.slice(1)}
                         </Text>
                         <AntDesign name="down" size={16} color="#555" />
@@ -775,21 +978,21 @@ export default function GoalsManager() {
                                 setModalOpenDropdown(null);
                               }}
                             >
-                              <Text style={{ color: "#222" }}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</Text>
+                              <Text style={{ color: "#000000" }}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</Text>
                             </TouchableOpacity>
                           ))}
                         </View>
                       )}
                     </View>
                   </View>
-                  {/* Start/End Time 选择器，逻辑同 index.tsx，可根据 scheduled 类型动态渲染 */}
+                  {/* Start/End Time 选择器，逻辑�?index.tsx，可根据 scheduled 类型动态渲�?*/}
                   {newTaskScheduled === "onetime" && (
                     <>
                       <TouchableOpacity
                         style={styles.detailPickerTouchable}
                         onPress={() => setShowStartTimePicker(true)}
                       >
-                        <Text style={{ color: newTaskStartTime ? "#222" : "#888" }}>
+                        <Text style={{ color: newTaskStartTime ? "#000000" : "#666666" }}>
                           {newTaskStartTime ? new Date(newTaskStartTime).toLocaleString() : "Select Start Time"}
                         </Text>
                         <AntDesign name="clockcircleo" size={16} color="#555" />
@@ -800,8 +1003,15 @@ export default function GoalsManager() {
                           mode="datetime"
                           display="default"
                           onChange={(event, date) => {
-                            setShowStartTimePicker(false);
-                            if (date) setNewTaskStartTime(date.toISOString());
+                            if (event.type === 'dismissed') {
+                              setShowStartTimePicker(false);
+                            } else if (date) {
+                              setNewTaskStartTime(date.toISOString());
+                              // 只在用户确认时关闭 (Android上为'set', iOS上会自动处理)
+                              if (event.type === 'set') {
+                                setShowStartTimePicker(false);
+                              }
+                            }
                           }}
                         />
                       )}
@@ -809,7 +1019,7 @@ export default function GoalsManager() {
                         style={styles.detailPickerTouchable}
                         onPress={() => setShowEndTimePicker(true)}
                       >
-                        <Text style={{ color: newTaskEndTime ? "#222" : "#888" }}>
+                        <Text style={{ color: newTaskEndTime ? "#000000" : "#666666" }}>
                           {newTaskEndTime ? new Date(newTaskEndTime).toLocaleString() : "Select End Time"}
                         </Text>
                         <AntDesign name="clockcircleo" size={16} color="#555" />
@@ -830,15 +1040,23 @@ export default function GoalsManager() {
                             return undefined;
                           })()}
                           onChange={(event, date) => {
-                            setShowEndTimePicker(false);
-                            if (date && newTaskStartTime) {
-                              // 强制 endTime 日期与 startTime 相同
+                            if (event.type === 'dismissed') {
+                              setShowEndTimePicker(false);
+                            } else if (date && newTaskStartTime) {
+                              // 强制 endTime 日期�?startTime 相同
                               const start = new Date(newTaskStartTime);
                               const end = new Date(date);
                               end.setFullYear(start.getFullYear(), start.getMonth(), start.getDate());
                               setNewTaskEndTime(end.toISOString());
+                              // 只在用户确认时关闭
+                              if (event.type === 'set') {
+                                setShowEndTimePicker(false);
+                              }
                             } else if (date) {
                               setNewTaskEndTime(date.toISOString());
+                              if (event.type === 'set') {
+                                setShowEndTimePicker(false);
+                              }
                             }
                           }}
                         />
@@ -851,7 +1069,7 @@ export default function GoalsManager() {
                         style={styles.detailPickerTouchable}
                         onPress={() => setShowStartTimePicker(true)}
                       >
-                        <Text style={{ color: newTaskStartTime ? "#222" : "#888" }}>
+                        <Text style={{ color: newTaskStartTime ? "#000000" : "#666666" }}>
                           {newTaskStartTime ? new Date(newTaskStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Select Start Time"}
                         </Text>
                         <AntDesign name="clockcircleo" size={16} color="#555" />
@@ -862,8 +1080,13 @@ export default function GoalsManager() {
                           mode="time"
                           display="default"
                           onChange={(event, date) => {
-                            setShowStartTimePicker(false);
-                            if (date) setNewTaskStartTime(date.toISOString());
+                            if (date) {
+                              setNewTaskStartTime(date.toISOString());
+                            }
+                            // 只在用户确认或取消时关闭，滚动调整时不关闭
+                            if (event.type === 'set' || event.type === 'dismissed') {
+                              setShowStartTimePicker(false);
+                            }
                           }}
                         />
                       )}
@@ -875,7 +1098,7 @@ export default function GoalsManager() {
                         style={styles.detailPickerTouchable}
                         onPress={() => setShowEndTimePicker(true)}
                       >
-                        <Text style={{ color: newTaskEndTime ? "#222" : "#888" }}>
+                        <Text style={{ color: newTaskEndTime ? "#000000" : "#666666" }}>
                           {newTaskEndTime ? new Date(newTaskEndTime).toLocaleString() : "Select End Time"}
                         </Text>
                         <AntDesign name="clockcircleo" size={16} color="#555" />
@@ -886,25 +1109,31 @@ export default function GoalsManager() {
                           mode="datetime"
                           display="default"
                           onChange={(event, date) => {
-                            setShowEndTimePicker(false);
-                            if (date) setNewTaskEndTime(date.toISOString());
+                            if (event.type === 'dismissed') {
+                              setShowEndTimePicker(false);
+                            } else if (date) {
+                              setNewTaskEndTime(date.toISOString());
+                              if (event.type === 'set') {
+                                setShowEndTimePicker(false);
+                              }
+                            }
                           }}
                         />
                       )}
                     </>
                   )}
-                  {/* 详情字段输入，支持多行增删 */}
+                  {/* 详情字段输入，支持多行增�?*/}
                   <View style={styles.detailContainer}>
                     <Text style={styles.goalField}>Details</Text>
                     {details.map((detail, idx) => (
                       <View key={idx} style={styles.detailRow}>
-                        {/* 新增：详情key选择器 */}
+                        {/* 新增：详情key选择�?*/}
                         <TouchableOpacity
                           style={[styles.detailPickerTouchable, { flex: 0.5, marginRight: 8, minWidth: 80 }]}
                           onPress={() => setModalOpenDropdown(modalOpenDropdown === `detail-key-${idx}` ? null : `detail-key-${idx}`)}
                           activeOpacity={0.8}
                         >
-                          <Text style={{ color: detail.key ? '#222' : '#888' }}>
+                          <Text style={{ color: detail.key ? '#000000' : '#666666' }}>
                             {detail.key ? detail.key : 'desc'}
                           </Text>
                           <AntDesign name="down" size={14} color="#555" />
@@ -921,7 +1150,7 @@ export default function GoalsManager() {
                                   setModalOpenDropdown(null);
                                 }}
                               >
-                                <Text style={{ color: '#222' }}>{opt}</Text>
+                                <Text style={{ color: '#000000' }}>{opt}</Text>
                               </TouchableOpacity>
                             ))}
                           </View>
@@ -952,7 +1181,7 @@ export default function GoalsManager() {
                         <TouchableOpacity
                           key={tag.id}
                           style={{
-                            backgroundColor: localNewTaskTags.includes(tag.id) ? (tag.color || '#007bff') : '#eee',
+                            backgroundColor: localNewTaskTags.includes(tag.id) ? (tag.color || '#666666') : '#f0f0f0',
                             borderRadius: 16,
                             paddingHorizontal: 12,
                             paddingVertical: 6,
@@ -968,13 +1197,51 @@ export default function GoalsManager() {
                       ))}
                     </View>
                   </View>
-                  {/* 其他表单项复用 index.tsx 逻辑 */}
+                  
+                  {/* Task Completion Status */}
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={styles.goalField}>Task Status</Text>
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: newTaskCompleted ? "#e8f5e8" : "#f0f0f0",
+                        padding: 12,
+                        borderRadius: 4,
+                        borderWidth: 1,
+                        borderColor: newTaskCompleted ? "#28a745" : "#ddd"
+                      }}
+                      onPress={() => setNewTaskCompleted(!newTaskCompleted)}
+                    >
+                      <View style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        backgroundColor: newTaskCompleted ? "#28a745" : "#ccc",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: 12
+                      }}>
+                        {newTaskCompleted && (
+                          <AntDesign name="check" size={12} color="#fff" />
+                        )}
+                      </View>
+                      <Text style={{ 
+                        fontSize: 14, 
+                        color: newTaskCompleted ? "#28a745" : "#666"
+                      }}>
+                        {newTaskCompleted ? "Completed" : "In Progress"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  
+                  {/* 其他表单项复�?index.tsx 逻辑 */}
                   <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
                     <TouchableOpacity onPress={handleClose} style={{ marginRight: 16 }}>
-                      <Text style={{ color: "#888", fontSize: 16 }}>Cancel</Text>
+                      <Text style={{ color: "#666666", fontSize: 16 }}>Cancel</Text>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={handleAddTask} disabled={savingTask}>
-                      <Text style={{ color: savingTask ? "#aaa" : "#007bff", fontSize: 16 }}>
+                      <Text style={{ color: savingTask ? "#999999" : "#000000", fontSize: 16 }}>
                         {savingTask ? (isEdit ? "Updating..." : "Adding...") : (isEdit ? "Update" : "Add")}
                       </Text>
                     </TouchableOpacity>
@@ -987,24 +1254,12 @@ export default function GoalsManager() {
       </Modal>
     )
   }
-  // 修复：确保 AddTaskModal 组件完整闭合
+  // 修复：确�?AddTaskModal 组件完整闭合
   return (
     <View style={styles.container}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <Text style={styles.header}>Goals & Tasks</Text>
-        <TouchableOpacity
-          style={{ backgroundColor: '#007bff', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
-          onPress={async () => {
-            try {
-              await sendSimpleNotification();
-              Alert.alert('Success', 'Test notification sent!');
-            } catch (e) {
-              Alert.alert('Error', 'Failed to send notification: ' + String(e));
-            }
-          }}
-        >
-          <Text style={{ color: 'white', fontSize: 12 }}>Test Notification</Text>
-        </TouchableOpacity>
+
       </View>
       {loading ? (
         <ActivityIndicator size="large" />
@@ -1012,228 +1267,877 @@ export default function GoalsManager() {
         <FlatList
           data={displayGoals}
           keyExtractor={(g) => g.id.toString()}
+          extraData={[goals.length, tasks.length, lastUpdateTime]} // 添加时间戳来强制重新渲染
           renderItem={renderGoal}
           ListEmptyComponent={
             <Text style={{ textAlign: "center", marginTop: 32 }}>
               No goals yet.
             </Text>
           }
+          nestedScrollEnabled={true} // 允许嵌套滚动
         />
       )}
-      {/* Add Goal Floating Button - calendar风格 */}
+      {/* Add Goal Floating Button - Minimalist Style */}
       <TouchableOpacity
         style={styles.fabSmall}
         onPress={() => setAddGoalVisible(true)}
         activeOpacity={0.85}
       >
-        <AntDesign name="plus" size={22} color="#fff" />
-        <Text style={styles.fabTextSmall}>Add Goal</Text>
+        <AntDesign name="plus" size={16} color="#ffffff" style={{ marginRight: 4 }} />
+        <Text style={styles.fabTextSmall}>Goal</Text>
       </TouchableOpacity>
+      
+
       <Modal visible={addGoalVisible} transparent animationType="slide">
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", alignItems: "center" }}>
             <TouchableWithoutFeedback>
-              <View style={{ backgroundColor: "#fff", padding: 24, borderRadius: 12, width: 300 }}>
-                <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 12 }}>Add Goal</Text>
-                
-                {/* Goal Name Input with Voice Recognition */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
-                  <TextInput
-                    style={{ flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8 }}
-                    placeholder="Goal Name (e.g. Fitness)"
-                    value={newGoalName}
-                    onChangeText={setNewGoalName}
-                    maxLength={32}
-                    autoCapitalize="words"
-                  />
-                  <VoiceInputButton
-                    onTextReceived={(text) => {
-                      setNewGoalName(text);
-                    }}
-                    placeholder="语音"
-                    style={{ minWidth: 70 }}
-                  />
-                </View>
-                
-                {/* Goal Description Input with Voice Recognition */}
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 8 }}>
-                  <TextInput
-                    style={{ flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, minHeight: 40 }}
-                    placeholder="Description (e.g. Run 3 times a week)"
-                    value={newGoalDesc}
-                    onChangeText={setNewGoalDesc}
-                    multiline
-                    maxLength={100}
-                  />
-                  <VoiceInputButton
-                    onTextReceived={(text) => {
-                      setNewGoalDesc(text);
-                    }}
-                    placeholder="语音"
-                    style={{ minWidth: 70 }}
-                  />
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                  <Text style={{ marginRight: 8 }}>Achieved:</Text>
-                  <Button title={newGoalAchieved ? "Yes" : "No"} onPress={() => setNewGoalAchieved(v => !v)} />
-                </View>
-                <TextInput
-                  style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
-                  placeholder="Life Points (number, e.g. 10)"
-                  value={newGoalLifePoints}
-                  onChangeText={v => setNewGoalLifePoints(v.replace(/[^0-9]/g, ''))}
-                  keyboardType="numeric"
-                  maxLength={6}
-                />
-                <TextInput
-                  style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 8, marginBottom: 12 }}
-                  placeholder="Priority (number, e.g. 1)"
-                  value={newGoalPriority}
-                  onChangeText={v => setNewGoalPriority(v.replace(/[^0-9]/g, ''))}
-                  keyboardType="numeric"
-                  maxLength={2}
-                />
-                {/* 目标不应有时间相关表单项，已移除 scheduled、start/end time 相关UI */}
-                <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
-                  <TouchableOpacity onPress={() => setAddGoalVisible(false)} style={{ marginRight: 16 }}>
-                    <Text style={{ color: "#888", fontSize: 16 }}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleAddGoal} disabled={addingGoal}>
-                    <Text style={{ color: addingGoal ? "#aaa" : "#007bff", fontSize: 16 }}>{addingGoal ? "Adding..." : "Add"}</Text>
+              <View style={{ backgroundColor: "#ffffff", padding: 20, borderRadius: 4, width: "95%", maxWidth: 450, maxHeight: "90%" }}>
+                {/* Header */}
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <Text style={{ fontSize: 20, fontWeight: "600", color: "#000000" }}>Add Goal</Text>
+                  <TouchableOpacity onPress={() => setAddGoalVisible(false)}>
+                    <Text style={{ fontSize: 16, color: "#666666" }}>×</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-      <Modal visible={modalVisible} transparent animationType="slide">
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.modalOverlay}>
-            <TouchableWithoutFeedback>
-              <View style={styles.modalContent}>
-                <ScrollView keyboardShouldPersistTaps="handled">
-                  <Text style={styles.modalTitle}>
-                    {editingGoal ? "Edit Goal" : "Add Goal"}
-                  </Text>
-                  
-                  {/* Goal Name Input with Voice Recognition */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 }}>
-                    <TextInput
-                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                      placeholder="Name* (e.g. Fitness, Learn React)"
-                      value={form.name}
-                      onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
-                      autoCapitalize="words"
-                      maxLength={32}
-                    />
-                    <VoiceInputButton
-                      onTextReceived={(text) => {
-                        setForm((f) => ({ ...f, name: text }));
-                      }}
-                      placeholder="语音"
-                      style={{ minWidth: 70 }}
-                    />
-                  </View>
-                  
-                  {/* Goal Description Input with Voice Recognition */}
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 8 }}>
-                    <TextInput
-                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                      placeholder="Description (e.g. Run 3 times a week)"
-                      value={form.description || ""}
-                      onChangeText={(v) =>
-                        setForm((f) => ({ ...f, description: v }))
-                      }
-                      maxLength={100}
-                      multiline
-                    />
-                    <VoiceInputButton
-                      onTextReceived={(text) => {
-                        setForm((f) => ({ ...f, description: text }));
-                      }}
-                      placeholder="语音"
-                      style={{ minWidth: 70 }}
-                    />
-                  </View>
-                  <View
+
+                {/* Tab Switcher */}
+                <View style={{ flexDirection: "row", backgroundColor: "#f8f9fa", borderRadius: 4, padding: 2, marginBottom: 20 }}>
+                  <TouchableOpacity
                     style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      marginBottom: 12,
+                      flex: 1,
+                      paddingVertical: 10,
+                      backgroundColor: activeTab === "ai" ? "#000000" : "transparent",
+                      borderRadius: 2,
+                      alignItems: "center"
                     }}
+                    onPress={() => setActiveTab("ai")}
                   >
-                    <Text style={{ marginRight: 8 }}>Achieved:</Text>
-                    <Button
-                      title={form.achieved ? "Yes" : "No"}
-                      onPress={() =>
-                        setForm((f) => ({ ...f, achieved: !f.achieved }))
-                      }
-                    />
-                  </View>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Life Points (number, e.g. 10)"
-                    value={form.lifePoints?.toString() || ""}
-                    onChangeText={(v) =>
-                      setForm((f) => ({
-                        ...f,
-                        lifePoints:
-                          v && !isNaN(Number(v)) ? Number(v) : undefined,
-                      }))
-                    }
-                    keyboardType="numeric"
-                    maxLength={6}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Priority (number, e.g. 1)"
-                    value={form.priority?.toString() || ""}
-                    onChangeText={(v) =>
-                      setForm((f) => ({
-                        ...f,
-                        priority:
-                          v && !isNaN(Number(v)) ? Number(v) : undefined,
-                      }))
-                    }
-                    keyboardType="numeric"
-                    maxLength={2}
-                  />
-                  <View
+                    <Text style={{ 
+                      color: activeTab === "ai" ? "#ffffff" : "#666666", 
+                      fontWeight: activeTab === "ai" ? "500" : "400",
+                      fontSize: 14
+                    }}>
+                      AI Generate
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
                     style={{
-                      flexDirection: "row",
-                      justifyContent: "flex-end",
-                      marginTop: 16,
+                      flex: 1,
+                      paddingVertical: 10,
+                      backgroundColor: activeTab === "manual" ? "#000000" : "transparent",
+                      borderRadius: 2,
+                      alignItems: "center"
                     }}
+                    onPress={() => setActiveTab("manual")}
                   >
-                    <TouchableOpacity
-                      onPress={() => {
-                        setModalVisible(false);
-                        Keyboard.dismiss();
-                      }}
-                      style={{ marginRight: 16 }}
-                    >
-                      <Text style={{ color: "#888", fontSize: 16 }}>
-                        Cancel
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleSave} disabled={saving}>
-                      <Text
+                    <Text style={{ 
+                      color: activeTab === "manual" ? "#ffffff" : "#666666", 
+                      fontWeight: activeTab === "manual" ? "500" : "400",
+                      fontSize: 14
+                    }}>
+                      Manual Create
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {/* AI Tab Content */}
+                  {activeTab === "ai" && (
+                    <>
+                      {/* Loading Overlay for AI Generation */}
+                      {isGeneratingPreview && (
+                        <View style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          zIndex: 1000,
+                          borderRadius: 8
+                        }}>
+                          <ActivityIndicator size="large" color="#000000" />
+                          <Text style={{ marginTop: 12, fontSize: 16, color: "#000000", fontWeight: "500" }}>
+                            AI is generating...
+                          </Text>
+                          <Text style={{ marginTop: 4, fontSize: 14, color: "#666666", textAlign: "center" }}>
+                            This may take a few minutes
+                          </Text>
+                        </View>
+                      )}
+
+                      {!aiPreviewData ? (
+                        <View>
+                          {/* AI Input Section */}
+                          <View style={{ backgroundColor: "#f8f9fa", padding: 16, borderRadius: 4, marginBottom: 16 }}>
+                            <Text style={{ fontSize: 16, fontWeight: "500", marginBottom: 12, color: "#000000" }}>
+                              Describe your goal
+                            </Text>
+                            <TextInput
+                              style={{
+                                borderWidth: 1,
+                                borderColor: "#dddddd",
+                                borderRadius: 4,
+                                padding: 12,
+                                minHeight: 80,
+                                textAlignVertical: 'top',
+                                marginBottom: 16,
+                                backgroundColor: "#ffffff"
+                              }}
+                              placeholder="e.g.: Learn React Native and build a calendar app&#10;or: Prepare for postgraduate exams including Math, English, and major courses"
+                              value={aiInput}
+                              onChangeText={setAiInput}
+                              multiline
+                              maxLength={300}
+                            />
+                            
+                            {/* AI Goal Parameters */}
+                            <View style={{ marginBottom: 16 }}>
+                              <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                                Goal Parameters (optional)
+                              </Text>
+                              <View style={{ flexDirection: "row", marginBottom: 8 }}>
+                                <View style={{ flex: 1, marginRight: 8 }}>
+                                  <Text style={{ fontSize: 12, color: "#666666", marginBottom: 4 }}>Priority</Text>
+                                  <TextInput
+                                    style={{
+                                      borderWidth: 1,
+                                      borderColor: "#dddddd",
+                                      borderRadius: 4,
+                                      padding: 8,
+                                      fontSize: 14,
+                                      backgroundColor: "#ffffff"
+                                    }}
+                                    placeholder="1-5"
+                                    value={aiGoalPriority}
+                                    onChangeText={setAiGoalPriority}
+                                    keyboardType="numeric"
+                                    maxLength={1}
+                                  />
+                                </View>
+                                <View style={{ flex: 1, marginLeft: 8 }}>
+                                  <Text style={{ fontSize: 12, color: "#666666", marginBottom: 4 }}>Life Points</Text>
+                                  <TextInput
+                                    style={{
+                                      borderWidth: 1,
+                                      borderColor: "#dddddd",
+                                      borderRadius: 4,
+                                      padding: 8,
+                                      fontSize: 14,
+                                      backgroundColor: "#ffffff"
+                                    }}
+                                    placeholder="100"
+                                    value={aiGoalLifePoints}
+                                    onChangeText={setAiGoalLifePoints}
+                                    keyboardType="numeric"
+                                  />
+                                </View>
+                              </View>
+                              <TextInput
+                                style={{
+                                  borderWidth: 1,
+                                  borderColor: "#dddddd",
+                                  borderRadius: 4,
+                                  padding: 8,
+                                  fontSize: 14,
+                                  backgroundColor: "#ffffff"
+                                }}
+                                placeholder="Additional description (optional)"
+                                value={aiGoalDescription}
+                                onChangeText={setAiGoalDescription}
+                                maxLength={100}
+                              />
+                            </View>
+
+                            <TouchableOpacity
+                              style={{
+                                backgroundColor: isGeneratingPreview ? "#e0e0e0" : "#000000",
+                                padding: 12,
+                                borderRadius: 4,
+                                alignItems: "center"
+                              }}
+                              onPress={handleAIPreview}
+                              disabled={isGeneratingPreview || !aiInput.trim()}
+                            >
+                              <Text style={{ color: "#ffffff", fontSize: 14, fontWeight: "500" }}>
+                                {isGeneratingPreview ? "Generating..." : "Generate"}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : (
+                        /* AI Preview Results */
+                        <View>
+                          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                            <Text style={{ fontSize: 14, fontWeight: "500", color: "#000000" }}>AI Preview</Text>
+                            <TouchableOpacity
+                              onPress={() => {
+                                setAiPreviewData(null);
+                                setEditableTasksPreview([]);
+                              }}
+                            >
+                              <Text style={{ color: "#666666", fontSize: 12 }}>Regenerate</Text>
+                            </TouchableOpacity>
+                          </View>
+                          
+                          {/* Goal Preview */}
+                          <View style={{ backgroundColor: "#f8f9fa", padding: 12, borderRadius: 4, marginBottom: 12 }}>
+                            <Text style={{ fontSize: 12, fontWeight: "500", color: "#666666" }}>Goal:</Text>
+                            <Text style={{ fontSize: 14, color: "#000000", marginTop: 4, fontWeight: "400" }}>
+                              {aiPreviewData?.goal_preview?.name}
+                            </Text>
+                            {aiPreviewData?.goal_preview?.description && (
+                              <Text style={{ fontSize: 12, color: "#666666", marginTop: 4 }}>
+                                {aiPreviewData.goal_preview.description}
+                              </Text>
+                            )}
+                          </View>
+
+                          {/* Tasks Preview - Enhanced with editing capabilities */}
+                          <Text style={{ fontSize: 12, fontWeight: "600", marginBottom: 8 }}>
+                            Task List ({aiPreviewData?.total_tasks || 0} tasks):
+                          </Text>
+                          <View style={{ maxHeight: 300, marginBottom: 16 }}>
+                            <ScrollView 
+                              nestedScrollEnabled={true}
+                              showsVerticalScrollIndicator={true}
+                              bounces={true}
+                              scrollEventThrottle={16}
+                              keyboardShouldPersistTaps="handled"
+                              contentContainerStyle={{ paddingBottom: 10 }}
+                              style={{ backgroundColor: "#f8f9fa", borderRadius: 2, padding: 8 }}
+                            >
+                              {editableTasksPreview.map((task, index) => (
+                                <View key={index} style={{ 
+                                  backgroundColor: "#ffffff", 
+                                  borderWidth: 1, 
+                                  borderColor: "#e0e0e0", 
+                                  borderRadius: 2, 
+                                  padding: 12, 
+                                  marginBottom: 8 
+                                }}>
+                                  {/* Task Header with Edit/Delete */}
+                                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                                    <View style={{ flex: 1, paddingRight: 8 }}>
+                                      <Text style={{ fontSize: 14, fontWeight: "500", color: "#000000" }}>
+                                        {index + 1}. {task.name}
+                                      </Text>
+                                    </View>
+                                    <View style={{ flexDirection: "row", gap: 6, flexShrink: 0 }}>
+                                      <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        delayPressIn={100}
+                                        onPress={() => {
+                                          // Handle edit task - open comprehensive edit dialog
+                                          const task = editableTasksPreview[index];
+                                          
+                                          // Create a simple multi-step edit process
+                                          const editTaskSteps = [
+                                            // Step 1: Edit name
+                                            () => {
+                                              Alert.prompt(
+                                                "Edit Task Name",
+                                                "Enter task name:",
+                                                [
+                                                  { text: "Cancel", style: "cancel" },
+                                                  { 
+                                                    text: "Next", 
+                                                    onPress: (newName) => {
+                                                      if (newName && newName.trim()) {
+                                                        const updatedTasks = [...editableTasksPreview];
+                                                        updatedTasks[index].name = newName.trim();
+                                                        setEditableTasksPreview(updatedTasks);
+                                                        
+                                                        // Step 2: Edit description
+                                                        setTimeout(() => {
+                                                          Alert.prompt(
+                                                            "Edit Description",
+                                                            "Enter task description (optional):",
+                                                            [
+                                                              { text: "Skip", onPress: () => editPriority() },
+                                                              { 
+                                                                text: "Next", 
+                                                                onPress: (newDesc) => {
+                                                                  const updatedTasks = [...editableTasksPreview];
+                                                                  updatedTasks[index].description = newDesc || "";
+                                                                  setEditableTasksPreview(updatedTasks);
+                                                                  editPriority();
+                                                                }
+                                                              }
+                                                            ],
+                                                            "plain-text",
+                                                            task.description
+                                                          );
+                                                        }, 100);
+                                                      }
+                                                    }
+                                                  }
+                                                ],
+                                                "plain-text",
+                                                task.name
+                                              );
+                                            }
+                                          ];
+                                          
+                                          const editPriority = () => {
+                                            Alert.prompt(
+                                              "Edit Priority",
+                                              "Enter priority (1-5):",
+                                              [
+                                                { text: "Skip", onPress: () => editDays() },
+                                                { 
+                                                  text: "Next", 
+                                                  onPress: (newPriority) => {
+                                                    const priority = parseInt(newPriority || "3");
+                                                    if (priority >= 1 && priority <= 5) {
+                                                      const updatedTasks = [...editableTasksPreview];
+                                                      updatedTasks[index].priority = priority;
+                                                      setEditableTasksPreview(updatedTasks);
+                                                    }
+                                                    editDays();
+                                                  }
+                                                }
+                                              ],
+                                              "plain-text",
+                                              task.priority.toString()
+                                            );
+                                          };
+                                          
+                                          const editDays = () => {
+                                            Alert.prompt(
+                                              "Edit Duration",
+                                              "Enter estimated days:",
+                                              [
+                                                { text: "Skip", onPress: () => editPoints() },
+                                                { 
+                                                  text: "Next", 
+                                                  onPress: (newDays) => {
+                                                    const days = parseInt(newDays || "1");
+                                                    if (days > 0) {
+                                                      const updatedTasks = [...editableTasksPreview];
+                                                      updatedTasks[index].scheduledParam = {
+                                                        ...updatedTasks[index].scheduledParam,
+                                                        estimatedDays: days
+                                                      };
+                                                      setEditableTasksPreview(updatedTasks);
+                                                    }
+                                                    editPoints();
+                                                  }
+                                                }
+                                              ],
+                                              "plain-text",
+                                              task.scheduledParam?.estimatedDays?.toString() || "1"
+                                            );
+                                          };
+                                          
+                                          const editPoints = () => {
+                                            Alert.prompt(
+                                              "Edit Points",
+                                              "Enter day points (optional):",
+                                              [
+                                                { text: "Done", onPress: () => Alert.alert("Success", "Task updated successfully!") },
+                                                { 
+                                                  text: "Save", 
+                                                  onPress: (newPoints) => {
+                                                    const points = newPoints ? parseInt(newPoints) : null;
+                                                    const updatedTasks = [...editableTasksPreview];
+                                                    updatedTasks[index].dayPoints = points;
+                                                    setEditableTasksPreview(updatedTasks);
+                                                    Alert.alert("Success", "Task updated successfully!");
+                                                  }
+                                                }
+                                              ],
+                                              "plain-text",
+                                              task.dayPoints?.toString() || ""
+                                            );
+                                          };
+                                          
+                                          // Start the edit process
+                                          editTaskSteps[0]();
+                                        }}
+                                        style={{ 
+                                          padding: 6,
+                                          backgroundColor: "#f0f0f0",
+                                          borderRadius: 2,
+                                          minWidth: 28,
+                                          alignItems: "center"
+                                        }}
+                                      >
+                                        <Text style={{ color: "#666666", fontSize: 10, fontWeight: "500" }}>Edit</Text>
+                                      </TouchableOpacity>
+                                      <TouchableOpacity
+                                        activeOpacity={0.7}
+                                        delayPressIn={100}
+                                        onPress={() => {
+                                          Alert.alert(
+                                            "Delete Task",
+                                            `Are you sure you want to delete "${task.name}"?`,
+                                            [
+                                              { text: "Cancel", style: "cancel" },
+                                              { 
+                                                text: "Delete", 
+                                                style: "destructive",
+                                                onPress: () => {
+                                                  const updatedTasks = editableTasksPreview.filter((_, i) => i !== index);
+                                                  setEditableTasksPreview(updatedTasks);
+                                                }
+                                              }
+                                            ]
+                                          );
+                                        }}
+                                        style={{ 
+                                          padding: 6,
+                                          backgroundColor: "#f0f0f0",
+                                          borderRadius: 2,
+                                          minWidth: 28,
+                                          alignItems: "center"
+                                        }}
+                                      >
+                                        <Text style={{ color: "#666666", fontSize: 10, fontWeight: "500" }}>Del</Text>
+                                      </TouchableOpacity>
+                                    </View>
+                                  </View>
+                                  
+                                  {/* Task Description */}
+                                  {task.description && (
+                                    <Text style={{ fontSize: 12, color: "#666666", marginBottom: 8, lineHeight: 16 }}>
+                                      {task.description}
+                                    </Text>
+                                  )}
+                                  
+                                  {/* Task Details Grid */}
+                                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                                    <View style={{ backgroundColor: "#f0f0f0", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 2 }}>
+                                      <Text style={{ fontSize: 11, color: "#666666" }}>Priority: {task.priority}</Text>
+                                    </View>
+                                    
+                                    {task.scheduledParam?.estimatedDays && (
+                                      <View style={{ backgroundColor: "#f0f0f0", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 2 }}>
+                                        <Text style={{ fontSize: 11, color: "#666666" }}>
+                                          Duration: {task.scheduledParam.estimatedDays} days
+                                        </Text>
+                                      </View>
+                                    )}
+                                    
+                                    {task.dayPoints && (
+                                      <View style={{ backgroundColor: "#f0f0f0", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 2 }}>
+                                        <Text style={{ fontSize: 11, color: "#666666" }}>Points: {task.dayPoints}</Text>
+                                      </View>
+                                    )}
+                                    
+                                    {task.scheduled && (
+                                      <View style={{ backgroundColor: "#f0f0f0", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 2 }}>
+                                        <Text style={{ fontSize: 11, color: "#666666" }}>
+                                          Scheduled: {new Date(task.scheduled).toLocaleDateString()}
+                                        </Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                  
+                                  {/* Time Information */}
+                                  {(task.scheduledParam?.startTime || task.scheduledParam?.endTime) && (
+                                    <View style={{ marginTop: 6, padding: 6, backgroundColor: "#f8f9fa", borderRadius: 2 }}>
+                                      <Text style={{ fontSize: 10, color: "#666666", fontWeight: "500" }}>Time Schedule:</Text>
+                                      {task.scheduledParam.startTime && (
+                                        <Text style={{ fontSize: 10, color: "#666666" }}>
+                                          Start: {task.scheduledParam.startTime}
+                                        </Text>
+                                      )}
+                                      {task.scheduledParam.endTime && (
+                                        <Text style={{ fontSize: 10, color: "#666666" }}>
+                                          End: {task.scheduledParam.endTime}
+                                        </Text>
+                                      )}
+                                    </View>
+                                  )}
+                                </View>
+                              ))}
+                              
+                              {/* Add New Task Button */}
+                              <TouchableOpacity
+                                activeOpacity={0.7}
+                                delayPressIn={100}
+                                onPress={() => {
+                                  // Multi-step new task creation
+                                  const createNewTask = () => {
+                                    let newTask: AITaskPreview = {
+                                      name: "",
+                                      description: "",
+                                      priority: 3,
+                                      dayPoints: null,
+                                      completed: false,
+                                      scheduled: new Date().toISOString(),
+                                      scheduledParam: {
+                                        estimatedDays: 1
+                                      }
+                                    };
+                                    
+                                    // Step 1: Name
+                                    Alert.prompt(
+                                      "Add New Task",
+                                      "Enter task name:",
+                                      [
+                                        { text: "Cancel", style: "cancel" },
+                                        { 
+                                          text: "Next", 
+                                          onPress: (taskName) => {
+                                            if (taskName && taskName.trim()) {
+                                              newTask.name = taskName.trim();
+                                              
+                                              // Step 2: Description
+                                              Alert.prompt(
+                                                "Task Description",
+                                                "Enter description (optional):",
+                                                [
+                                                  { text: "Skip", onPress: () => setPriority() },
+                                                  { 
+                                                    text: "Next", 
+                                                    onPress: (description) => {
+                                                      newTask.description = description || "";
+                                                      setPriority();
+                                                    }
+                                                  }
+                                                ],
+                                                "plain-text"
+                                              );
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "plain-text"
+                                    );
+                                    
+                                    const setPriority = () => {
+                                      Alert.prompt(
+                                        "Task Priority",
+                                        "Enter priority (1-5, default is 3):",
+                                        [
+                                          { text: "Skip", onPress: () => setDuration() },
+                                          { 
+                                            text: "Next", 
+                                            onPress: (priority) => {
+                                              const p = parseInt(priority || "3");
+                                              if (p >= 1 && p <= 5) {
+                                                newTask.priority = p;
+                                              }
+                                              setDuration();
+                                            }
+                                          }
+                                        ],
+                                        "plain-text",
+                                        "3"
+                                      );
+                                    };
+                                    
+                                    const setDuration = () => {
+                                      Alert.prompt(
+                                        "Task Duration",
+                                        "Enter estimated days (default is 1):",
+                                        [
+                                          { text: "Skip", onPress: () => setPoints() },
+                                          { 
+                                            text: "Next", 
+                                            onPress: (days) => {
+                                              const d = parseInt(days || "1");
+                                              if (d > 0) {
+                                                newTask.scheduledParam.estimatedDays = d;
+                                              }
+                                              setPoints();
+                                            }
+                                          }
+                                        ],
+                                        "plain-text",
+                                        "1"
+                                      );
+                                    };
+                                    
+                                    const setPoints = () => {
+                                      Alert.prompt(
+                                        "Day Points",
+                                        "Enter day points (optional):",
+                                        [
+                                          { text: "Create", onPress: () => finalizeTask() },
+                                          { 
+                                            text: "Save", 
+                                            onPress: (points) => {
+                                              const p = points ? parseInt(points) : null;
+                                              if (p !== null && p > 0) {
+                                                newTask.dayPoints = p;
+                                              }
+                                              finalizeTask();
+                                            }
+                                          }
+                                        ],
+                                        "plain-text"
+                                      );
+                                    };
+                                    
+                                    const finalizeTask = () => {
+                                      setEditableTasksPreview([...editableTasksPreview, newTask]);
+                                      Alert.alert("Success", "New task added successfully!");
+                                    };
+                                  };
+                                  
+                                  createNewTask();
+                                }}
+                                style={{
+                                  backgroundColor: "#f8f9fa",
+                                  borderWidth: 1,
+                                  borderColor: "#e0e0e0",
+                                  borderStyle: "dashed",
+                                  borderRadius: 2,
+                                  padding: 12,
+                                  alignItems: "center",
+                                  marginTop: 8,
+                                  marginBottom: 8
+                                }}
+                              >
+                                <Text style={{ color: "#666666", fontSize: 13, fontWeight: "500" }}>
+                                  + Add New Task
+                                </Text>
+                              </TouchableOpacity>
+                            </ScrollView>
+                          </View>
+
+                          {/* Create Button */}
+                          <TouchableOpacity
+                            style={{
+                              backgroundColor: isCreatingFromPreview ? "#e0e0e0" : "#000000",
+                              padding: 12,
+                              borderRadius: 2,
+                              alignItems: "center",
+                              marginBottom: 16
+                            }}
+                            onPress={handleCreateFromPreview}
+                            disabled={isCreatingFromPreview}
+                          >
+                            {isCreatingFromPreview ? (
+                              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                                <ActivityIndicator size="small" color="#fff" />
+                                <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
+                                  Creating...
+                                </Text>
+                              </View>
+                            ) : (
+                              <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
+                                �?Confirm Create Goal and Tasks
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </>
+                  )}
+
+                  {/* Manual Tab Content */}
+                  {activeTab === "manual" && (
+                    <View>
+                      {/* Goal Name Input */}
+                      <View style={{ marginBottom: 16 }}>
+                        <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                          Goal Name *
+                        </Text>
+                        <TextInput
+                          style={{ 
+                            borderWidth: 1, 
+                            borderColor: "#dddddd", 
+                            borderRadius: 4, 
+                            padding: 12,
+                            backgroundColor: "#ffffff",
+                            fontSize: 16
+                          }}
+                          placeholder="e.g.: Fitness Plan, Learn React Native"
+                          value={newGoalName}
+                          onChangeText={setNewGoalName}
+                          maxLength={50}
+                          autoCapitalize="words"
+                        />
+                      </View>
+                      
+                      {/* Goal Description Input */}
+                      <View style={{ marginBottom: 16 }}>
+                        <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                          Goal Description
+                        </Text>
+                        <TextInput
+                          style={{ 
+                            borderWidth: 1, 
+                            borderColor: "#dddddd", 
+                            borderRadius: 4, 
+                            padding: 12, 
+                            minHeight: 80, 
+                            textAlignVertical: 'top',
+                            backgroundColor: "#ffffff",
+                            fontSize: 14
+                          }}
+                          placeholder="Describe your goal in detail..."
+                          value={newGoalDesc}
+                          onChangeText={setNewGoalDesc}
+                          multiline
+                          maxLength={200}
+                        />
+                      </View>
+                      
+                      {/* Parameters Row */}
+                      <View style={{ flexDirection: "row", marginBottom: 16 }}>
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                            Priority
+                          </Text>
+                          <TextInput
+                            style={{ 
+                              borderWidth: 1, 
+                              borderColor: "#dddddd", 
+                              borderRadius: 4, 
+                              padding: 12,
+                              backgroundColor: "#ffffff",
+                              fontSize: 14
+                            }}
+                            placeholder="1-5"
+                            value={newGoalPriority}
+                            onChangeText={v => setNewGoalPriority(v.replace(/[^0-9]/g, ''))}
+                            keyboardType="numeric"
+                            maxLength={1}
+                          />
+                        </View>
+                        
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                          <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                            Life Points
+                          </Text>
+                          <TextInput
+                            style={{ 
+                              borderWidth: 1, 
+                              borderColor: "#dddddd", 
+                              borderRadius: 4, 
+                              padding: 12,
+                              backgroundColor: "#ffffff",
+                              fontSize: 14
+                            }}
+                            placeholder="100"
+                            value={newGoalLifePoints}
+                            onChangeText={v => setNewGoalLifePoints(v.replace(/[^0-9]/g, ''))}
+                            keyboardType="numeric"
+                            maxLength={6}
+                          />
+                        </View>
+                      </View>
+                      
+                      {/* Achieved Toggle */}
+                      <View style={{ marginBottom: 20 }}>
+                        <Text style={{ fontSize: 14, fontWeight: "500", marginBottom: 8, color: "#000000" }}>
+                          Goal Status
+                        </Text>
+                        <TouchableOpacity
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: newGoalAchieved ? "#f8f9fa" : "#f8f9fa",
+                            padding: 12,
+                            borderRadius: 4,
+                            borderWidth: 1,
+                            borderColor: newGoalAchieved ? "#000000" : "#dddddd"
+                          }}
+                          onPress={() => setNewGoalAchieved(!newGoalAchieved)}
+                        >
+                          <View style={{
+                            width: 16,
+                            height: 16,
+                            borderRadius: 2,
+                            backgroundColor: newGoalAchieved ? "#000000" : "#ffffff",
+                            borderWidth: newGoalAchieved ? 0 : 1,
+                            borderColor: "#dddddd",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 12
+                          }}>
+                            {newGoalAchieved && (
+                              <Text style={{ color: "#ffffff", fontSize: 10, fontWeight: "bold" }}>✓</Text>
+                            )}
+                          </View>
+                          <Text style={{ 
+                            fontSize: 14, 
+                            color: newGoalAchieved ? "#000000" : "#666666"
+                          }}>
+                            {newGoalAchieved ? "Completed" : "In Progress"}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      
+                      {/* Create Button */}
+                      <TouchableOpacity
                         style={{
-                          color: saving ? "#aaa" : "#007bff",
-                          fontSize: 16,
+                          backgroundColor: addingGoal ? "#e0e0e0" : "#000000",
+                          padding: 16,
+                          borderRadius: 4,
+                          alignItems: "center",
+                          marginBottom: 16
                         }}
+                        onPress={handleAddGoal}
+                        disabled={addingGoal || !newGoalName.trim()}
                       >
-                        {saving ? "Saving..." : "Save"}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+                        {addingGoal ? (
+                          <View style={{ flexDirection: "row", alignItems: "center" }}>
+                            <ActivityIndicator size="small" color="#666666" />
+                            <Text style={{ color: "#666666", fontSize: 16, fontWeight: "500", marginLeft: 8 }}>
+                              Creating...
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text style={{ color: "#ffffff", fontSize: 16, fontWeight: "500" }}>
+                            Create Goal
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </ScrollView>
+
+                {/* Bottom Buttons */}
+                <View style={{ 
+                  flexDirection: "row", 
+                  justifyContent: "space-between", 
+                  alignItems: "center",
+                  paddingTop: 16,
+                  borderTopWidth: 1,
+                  borderTopColor: "#eee",
+                  marginTop: 8
+                }}>
+                  <TouchableOpacity 
+                    onPress={() => {
+                      setAddGoalVisible(false);
+                      resetAIModal();
+                      setNewGoalName("");
+                      setNewGoalDesc("");
+                      setNewGoalAchieved(false);
+                      setNewGoalLifePoints("");
+                      setNewGoalPriority("");
+                    }}
+                    style={{
+                      paddingVertical: 12,
+                      paddingHorizontal: 24,
+                      borderRadius: 4,
+                      backgroundColor: "#f8f9fa",
+                      borderWidth: 1,
+                      borderColor: "#dddddd"
+                    }}
+                  >
+                    <Text style={{ color: "#666666", fontSize: 16, fontWeight: "400" }}>Cancel</Text>
+                  </TouchableOpacity>
+                  
+                  <Text style={{ fontSize: 12, color: "#999999", textAlign: "center", flex: 1, marginHorizontal: 16 }}>
+                    {activeTab === "ai" ? "AI will generate goals and tasks" : "Create a custom goal"}
+                  </Text>
+                </View>
               </View>
             </TouchableWithoutFeedback>
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
       <AddTaskModal
         visible={addTaskModalVisible}
         goalId={addingTaskGoalId}
@@ -1256,7 +2160,8 @@ export default function GoalsManager() {
           endTime: newTaskEndTime,
           scheduled: newTaskScheduled,
           scheduledParam: newTaskScheduledParam,
-          details: details
+          details: details,
+          completed: editingTask?.completed || false
         }}
       />
     </View>
@@ -1268,17 +2173,18 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingTop: 40,
     paddingHorizontal: 16,
-    backgroundColor: "#f7f9fc",
+    backgroundColor: "#ffffff",
   },
   header: {
     fontSize: 28,
-    fontWeight: "bold",
+    fontWeight: "600",
     marginBottom: 24,
     textAlign: "center",
+    color: "#000000",
   },
   goalCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    borderRadius: 4,
     padding: 16,
     marginBottom: 16,
     shadowColor: "#000",
@@ -1286,18 +2192,20 @@ const styles = StyleSheet.create({
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 4,
-    elevation: 2,
+    elevation: 1,
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
   },
   goalTitle: {
     fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
+    fontWeight: "500",
+    color: "#000000",
   },
   goalDesc: {
     fontSize: 14,
-    color: "#666",
+    color: "#666666",
     marginTop: 4,
   },
   goalDetailsBox: {
@@ -1305,13 +2213,13 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     paddingHorizontal: 16,
-    backgroundColor: "#f9f9f9",
+    backgroundColor: "#f8f9fa",
     borderTopWidth: 1,
-    borderTopColor: "#e0e0e0",
+    borderTopColor: "#dddddd",
   },
   goalField: {
     fontSize: 14,
-    color: "#333",
+    color: "#000000",
     marginBottom: 8,
   },
   taskTreeBox: {
@@ -1326,37 +2234,39 @@ const styles = StyleSheet.create({
     left: 9,
     width: 2,
     height: "100%",
-    backgroundColor: "#007bff",
+    backgroundColor: "#dddddd",
     zIndex: 1,
   },
   taskCardTree: {
-    backgroundColor: "#fff",
-    borderRadius: 8,
+    backgroundColor: "#ffffff",
+    borderRadius: 4,
     padding: 12,
     marginBottom: 8,
     marginLeft: 18,
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
-      height: 2,
+      height: 1,
     },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
   },
   taskTitle: {
     fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
+    fontWeight: "500",
+    color: "#000000",
   },
   taskField: {
     fontSize: 14,
-    color: "#666",
+    color: "#666666",
     marginTop: 4,
   },
   taskHint: {
     fontSize: 10,
-    color: "#aaa",
+    color: "#999999",
     marginLeft: 8,
     fontStyle: 'italic',
   },
@@ -1369,18 +2279,17 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 16,
     right: 16,
-    backgroundColor: "#007bff",
-    borderRadius: 24,
+    backgroundColor: "#000000",
+    borderRadius: 4,
     paddingVertical: 12,
     paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 4,
   },
   fabTextSmall: {
-    color: "#fff",
+    color: "#ffffff",
     fontSize: 14,
-    marginLeft: 8,
+    fontWeight: "500",
   },
   modalOverlay: {
     flex: 1,
@@ -1461,17 +2370,17 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   addDetailButton: {
-    backgroundColor: "#007bff",
-    borderRadius: 8,
+    backgroundColor: "#000000",
+    borderRadius: 4,
     paddingVertical: 10,
     paddingHorizontal: 16,
     alignItems: "center",
     marginTop: 8,
   },
   addDetailButtonText: {
-    color: "#fff",
+    color: "#ffffff",
     fontSize: 16,
-    fontWeight: "bold",
+    fontWeight: "500",
   },
   dateTimeContainer: {
     marginBottom: 12,
@@ -1483,8 +2392,8 @@ const styles = StyleSheet.create({
   },
   // AddTagToTaskButton 组件样式
   tagButton: {
-    backgroundColor: "#007bff",
-    borderRadius: 16,
+    backgroundColor: "#000000",
+    borderRadius: 4,
     paddingVertical: 6,
     paddingHorizontal: 12,
     flexDirection: "row",
@@ -1493,7 +2402,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   tagButtonText: {
-    color: "#fff",
+    color: "#ffffff",
     fontSize: 14,
     marginLeft: 4,
   },
@@ -1514,7 +2423,7 @@ const styles = StyleSheet.create({
   tagPickerTitle: {
     fontSize: 18,
     fontWeight: "bold",
-    marginBottom: 16,
+       marginBottom: 16,
     textAlign: "center",
   },
   tagOption: {
@@ -1538,7 +2447,7 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   tagPickerSave: {
-    color: "#007bff",
+    color: "#000000",
     fontSize: 16,
   },
 });

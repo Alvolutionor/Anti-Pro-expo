@@ -24,8 +24,8 @@ export const VoiceRecognitionPanel: React.FC<VoiceRecognitionPanelProps> = ({
   visible,
   onClose,
   onTextReceived,
-  title = '语音识别',
-  placeholder = '请说出您要添加的任务内容...',
+  title = 'Voice Recognition',
+  placeholder = 'Please speak the task content you want to add...',
 }) => {
   const [scaleAnim] = useState(new Animated.Value(0));
 
@@ -153,7 +153,7 @@ export const VoiceRecognitionPanel: React.FC<VoiceRecognitionPanelProps> = ({
               <View style={styles.header}>
                 <Text style={styles.title}>{title}</Text>
                 <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
-                  <Ionicons name="close" size={24} color="#666" />
+                  <Ionicons name="close" size={24} color="#666666" />
                 </TouchableOpacity>
               </View>
 
@@ -183,7 +183,7 @@ export const VoiceRecognitionPanel: React.FC<VoiceRecognitionPanelProps> = ({
                     <Ionicons 
                       name="mic-outline" 
                       size={48} 
-                      color={isProcessing ? '#ff8800' : '#2196F3'} 
+                      color={isProcessing ? '#666666' : '#000000'} 
                     />
                   </View>
                 )}
@@ -219,8 +219,8 @@ export const VoiceRecognitionPanel: React.FC<VoiceRecognitionPanelProps> = ({
                   onPress={transcribeFromFile}
                   disabled={isProcessing || isRecording}
                 >
-                  <Ionicons name="document-outline" size={24} color="#2196F3" />
-                  <Text style={styles.fileButtonText}>从文件选择</Text>
+                  <Ionicons name="document-outline" size={24} color="#666666" />
+                  <Text style={styles.fileButtonText}>Select from File</Text>
                 </TouchableOpacity>
               </View>
 
@@ -289,7 +289,7 @@ const styles = StyleSheet.create({
   transcriptionContainer: {
     maxHeight: 100,
     width: '100%',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f9fa',
     borderRadius: 8,
     padding: 12,
   },
@@ -355,23 +355,23 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#000000',
   },
   recordButtonActiveGrad: {
-    backgroundColor: '#ff4444',
+    backgroundColor: '#666666',
   },
   fileButton: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#f0f8ff',
+    borderRadius: 4,
+    backgroundColor: '#f8f9fa',
     borderWidth: 1,
-    borderColor: '#2196F3',
+    borderColor: '#dddddd',
   },
   fileButtonText: {
     marginLeft: 8,
-    color: '#2196F3',
+    color: '#666666',
     fontWeight: '500',
   },
   hintContainer: {
@@ -379,7 +379,7 @@ const styles = StyleSheet.create({
   },
   hintText: {
     fontSize: 12,
-    color: '#999',
+    color: '#666666',
     textAlign: 'center',
     lineHeight: 16,
   },

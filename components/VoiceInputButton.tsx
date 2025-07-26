@@ -19,7 +19,7 @@ interface VoiceInputButtonProps {
 
 export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
   onTextReceived,
-  placeholder = '点击录音',
+  placeholder = 'Click to record',
   style,
   disabled = false,
 }) => {
@@ -39,19 +39,19 @@ export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
     minDuration: 1000,  // 1秒
     onTranscriptionComplete: (text) => {
       onTextReceived(text);
-      Alert.alert('语音识别成功', `识别结果: ${text}`);
+      Alert.alert('Voice Recognition Success', `Recognition result: ${text}`);
     },
     onTranscriptionError: (error) => {
-      Alert.alert('语音识别失败', error);
+      Alert.alert('Voice Recognition Failed', error);
     },
   });
 
   const getButtonColor = () => {
-    if (disabled) return '#ccc';
-    if (error) return '#ff4444';
-    if (isRecording) return '#ff4444';
-    if (isProcessing) return '#ff8800';
-    return '#2196F3';
+    if (disabled) return '#e0e0e0';
+    if (error) return '#666666';
+    if (isRecording) return '#000000';
+    if (isProcessing) return '#666666';
+    return '#000000';
   };
 
   const getButtonText = () => {
@@ -67,9 +67,9 @@ export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
     
     if (hasPermission === false) {
       Alert.alert(
-        '需要麦克风权限',
-        '请在设置中允许此应用使用麦克风',
-        [{ text: '确定' }]
+        'Microphone Permission Required',
+        'Please allow this app to use microphone in settings',
+        [{ text: 'OK' }]
       );
       return;
     }
@@ -115,7 +115,7 @@ export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
         onPress={handleFilePress}
         disabled={disabled || isRecording || isProcessing}
       >
-        <Ionicons name="document-outline" size={16} color="#2196F3" />
+        <Ionicons name="document-outline" size={16} color="#666666" />
       </TouchableOpacity>
     </View>
   );
@@ -150,9 +150,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 8,
-    backgroundColor: '#f0f8ff',
+    backgroundColor: '#f8f9fa',
     borderWidth: 1,
-    borderColor: '#2196F3',
+    borderColor: '#dddddd',
     justifyContent: 'center',
     alignItems: 'center',
   },

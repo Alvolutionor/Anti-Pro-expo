@@ -1,12 +1,14 @@
 import { configureStore } from '@reduxjs/toolkit';
 import goalReducer from './goalSlice';
 import taskReducer from './taskSlice';
-
+import { taskNotificationMiddleware } from './middleware';
 const store = configureStore({
   reducer: {
     goal: goalReducer,
     task: taskReducer,
   },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().concat(taskNotificationMiddleware)
 });
 
 export type RootState = ReturnType<typeof store.getState>;
