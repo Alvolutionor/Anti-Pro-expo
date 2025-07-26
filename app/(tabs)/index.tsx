@@ -35,7 +35,7 @@ import { setTasks, updateTask as updateTaskInStore } from "../../store/taskSlice
 import { setGoals } from "../../store/goalSlice";
 import { LogBox } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// import VoiceInputButton from '../../components/VoiceInputButton';
+import VoiceInputButton from '../../components/VoiceInputButton';
 
 
 LogBox.ignoreLogs(['useInsertionEffect must not schedule updates']);// some issue with swiper package
@@ -824,7 +824,13 @@ const ScheduleScreen = ({}) => {
                           setShowEventPicker(false);
                         }}
                       />
-
+                      <VoiceInputButton
+                        onTextReceived={(text) => {
+                          setNewTaskName(text);
+                        }}
+                        style={styles.voiceButton}
+                        placeholder="语音输入任务名称"
+                      />
                     </View>
 
                     {/* Start Time - 无论 More 是否展开都显示，且受 scheduled 类型控制 */}
@@ -1600,22 +1606,20 @@ const ScheduleScreen = ({}) => {
         leftActivationValue={SWIPETHRESHOLD}
         onLeftActionStatusChange={(rowData) => {
           if (rowData.value >= SWIPETHRESHOLD) {
-            const taskId = (item: any) => item.originalId || item.id;
             const task = todoTasks.find(t => String(t.id) === rowData.key);
             if (task) {
-              changeScheduleData(taskId(task), "completed", true);
-              handleTaskStatusChange(taskId(task), true);
+              changeScheduleData(task.id, "completed", true);
+              handleTaskStatusChange(task.id, true);
             }
           }
         }}
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           if (rowData.value <= -SWIPETHRESHOLD) {
-            const taskId = (item: any) => item.originalId || item.id;
             const task = todoTasks.find(t => String(t.id) === rowData.key);
             if (task) {
-              changeScheduleData(taskId(task), "completed", false);
-              handleTaskStatusChange(taskId(task), false);
+              changeScheduleData(task.id, "completed", false);
+              handleTaskStatusChange(task.id, false);
             }
           }
         }}
@@ -1631,11 +1635,10 @@ const ScheduleScreen = ({}) => {
         rightActivationValue={-SWIPETHRESHOLD}
         onRightActionStatusChange={(rowData) => {
           if (rowData.value <= -SWIPETHRESHOLD) {
-            const taskId = (item: any) => item.originalId || item.id;
             const task = completedTasks.find(t => String(t.id) === rowData.key);
             if (task) {
-              changeScheduleData(taskId(task), "completed", false);
-              handleTaskStatusChange(taskId(task), false);
+              changeScheduleData(task.id, "completed", false);
+              handleTaskStatusChange(task.id, false);
             }
           }
         }}
@@ -1650,11 +1653,10 @@ const ScheduleScreen = ({}) => {
         leftActivationValue={SWIPETHRESHOLD}
         onLeftActionStatusChange={(rowData) => {
           if (rowData.value >= SWIPETHRESHOLD) {
-            const taskId = (item: any) => item.originalId || item.id;
             const task = notDoneTasks.find(t => String(t.id) === rowData.key);
             if (task) {
-              changeScheduleData(taskId(task), "completed", null);
-              handleTaskStatusChange(taskId(task), null);
+              changeScheduleData(task.id, "completed", null);
+              handleTaskStatusChange(task.id, null);
             }
           }
         }}
@@ -1667,6 +1669,80 @@ const ScheduleScreen = ({}) => {
         activeOpacity={0.85}
       >
         <Text style={styles.fabTextSmall}>+ Task</Text>
+      </TouchableOpacity>
+
+      {/* 临时通知测试按钮 - 稍后移除 */}
+      <TouchableOpacity
+        style={[styles.fabSmall, { bottom: 120, backgroundColor: '#ff6b6b' }]}
+        onPress={async () => {
+          try {
+            console.log("测试通知按钮被点击");
+            
+            // 导入通知函数
+            const { scheduleAllUpcomingTaskNotifications, scheduleTestNotification, requestNotificationPermission, setupNotificationChannel } = require('../../utils/notifications');
+            
+            // 检查权限
+            console.log("检查通知权限...");
+            const granted = await requestNotificationPermission();
+            console.log("通知权限状态:", granted);
+            
+            if (!granted) {
+              Alert.alert("权限错误", "通知权限未授权，请在设置中开启");
+              return;
+            }
+            
+            // 设置通知通道
+            console.log("设置通知通道...");
+            await setupNotificationChannel();
+            
+            // 测试立即通知
+            console.log("发送测试通知...");
+            await scheduleTestNotification();
+            Alert.alert("测试通知", "已发送测试通知，请检查通知栏和控制台日志");
+            
+            // 测试任务通知调度
+            console.log("调度任务通知...");
+            const count = await scheduleAllUpcomingTaskNotifications();
+            console.log("调度任务数量:", count);
+            Alert.alert("通知调度", `已为 ${count} 个任务安排了通知，查看控制台获取详细信息`);
+          } catch (error) {
+            console.error("通知测试错误:", error);
+            Alert.alert("通知测试失败", `错误: ${String(error)}`);
+          }
+        }}
+        activeOpacity={0.85}
+      >
+        <Text style={[styles.fabTextSmall, { color: '#fff' }]}>🔔</Text>
+      </TouchableOpacity>
+
+      {/* 临时语音测试按钮 - 稍后移除 */}
+      <TouchableOpacity
+        style={[styles.fabSmall, { bottom: 180, backgroundColor: '#4CAF50' }]}
+        onPress={() => {
+          // 导航到语音演示页面
+          router.push('/voice-demo');
+        }}
+        activeOpacity={0.85}
+      >
+        <Text style={[styles.fabTextSmall, { color: '#fff' }]}>🎤</Text>
+      </TouchableOpacity>
+
+      {/* 临时语音通知测试按钮 - 稍后移除 */}
+      <TouchableOpacity
+        style={[styles.fabSmall, { bottom: 240, backgroundColor: '#9C27B0' }]}
+        onPress={async () => {
+          try {
+            const { testVoiceNotification } = require('../../utils/notifications');
+            await testVoiceNotification();
+            Alert.alert("语音通知测试", "语音播报测试已开始");
+          } catch (error) {
+            console.error('语音通知测试失败:', error);
+            Alert.alert("语音通知测试失败", `错误: ${String(error)}`);
+          }
+        }}
+        activeOpacity={0.85}
+      >
+        <Text style={[styles.fabTextSmall, { color: '#fff' }]}>🔊</Text>
       </TouchableOpacity>
 
 

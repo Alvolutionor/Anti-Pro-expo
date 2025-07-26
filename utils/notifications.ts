@@ -5,24 +5,146 @@ import store from '../store/store';
 import { TaskOut, GoalOut } from './api';
 import * as Speech from 'expo-speech';
 
+// 语音播报设置
+const VOICE_CONFIG = {
+  language: 'zh-CN', // 中文语音
+  pitch: 1.0,
+  rate: 0.8, // 稍慢的语速便于理解
+  volume: 1.0,
+};
 
+// 语音播报功能
+export async function speakNotification(title: string, body: string, options?: Speech.SpeechOptions) {
+  try {
+    console.log("准备语音播报:", title, body);
+    
+    // 检查语音功能是否可用
+    const available = await Speech.isSpeakingAsync();
+    if (available) {
+      console.log("当前正在播报，停止之前的语音");
+      await Speech.stop();
+    }
+    
+    // 组合要播报的内容
+    const textToSpeak = `${title}。${body}`;
+    
+    // 使用配置进行语音播报
+    const speakOptions: Speech.SpeechOptions = {
+      ...VOICE_CONFIG,
+      ...options, // 允许外部覆盖配置
+      onStart: () => console.log("开始语音播报:", textToSpeak),
+      onDone: () => console.log("语音播报完成"),
+      onStopped: () => console.log("语音播报被停止"),
+      onError: (error) => console.error("语音播报错误:", error),
+    };
+    
+    await Speech.speak(textToSpeak, speakOptions);
+    console.log("语音播报已启动");
+    
+  } catch (error) {
+    console.error("语音播报失败:", error);
+  }
+}
 
+// 停止语音播报
+export async function stopSpeaking() {
+  try {
+    const isSpeaking = await Speech.isSpeakingAsync();
+    if (isSpeaking) {
+      await Speech.stop();
+      console.log("已停止语音播报");
+    }
+  } catch (error) {
+    console.error("停止语音播报失败:", error);
+  }
+}
 
+// 测试语音播报功能
+export async function testVoiceNotification() {
+  console.log("开始测试语音通知");
+  await speakNotification(
+    "语音测试", 
+    "这是一个语音通知测试，如果您能听到这段话，说明语音功能正常工作"
+  );
+}
 // 发送一个简单的通知（带权限判断和通道注册）
 export async function sendSimpleNotification() {
   const granted = await requestNotificationPermission();
   if (!granted) return;
   await setupNotificationChannel();
   
+  const title = 'Test Notification';
+  const body = 'This is a test notification!';
+  
   // 立即显示通知
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Test Notification',
-      body: 'This is a test notification!',
+      title,
+      body,
       sound: true,
     },
     trigger: null, // 立即显示
   });
+  
+  // 同时进行语音播报
+  await speakNotification(title, body);
+}
+
+// 测试通知函数 - 临时使用（包含语音播报）
+export async function scheduleTestNotification() {
+  console.log("开始测试通知函数");
+  
+  const granted = await requestNotificationPermission();
+  console.log("权限检查结果:", granted);
+  if (!granted) {
+    throw new Error('通知权限未授权');
+  }
+  
+  await setupNotificationChannel();
+  console.log("通知通道设置完成");
+  
+  const title = '🔔 通知测试';
+  const body = `测试时间: ${new Date().toLocaleTimeString()} - 通知系统正常工作!`;
+  
+  // 立即发送一个测试通知
+  console.log("准备发送立即通知...");
+  const immediateNotificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      sound: true,
+      data: { type: 'test' },
+    },
+    trigger: null, // 立即显示
+  });
+  console.log("立即通知已安排，ID:", immediateNotificationId);
+  
+  // 立即进行语音播报
+  await speakNotification(title, body);
+  
+  const delayedTitle = '⏰ 延迟测试通知';
+  const delayedBody = '这是一个5秒延迟的测试通知';
+  
+  // 5秒后再发送一个延迟通知
+  console.log("准备安排延迟通知...");
+  const delayedNotificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: delayedTitle,
+      body: delayedBody,
+      sound: true,
+      data: { type: 'delayed_test', hasVoice: true },
+    },
+    trigger: { 
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: 5 
+    },
+  });
+  console.log("延迟通知已安排，ID:", delayedNotificationId);
+  
+  // 检查已安排的通知
+  const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
+  console.log("当前已安排的通知数量:", scheduledNotifications.length);
+  console.log("已安排通知详情:", scheduledNotifications);
 }
 
 
@@ -279,4 +401,68 @@ export async function testOneMinuteTaskNotification() {
     console.error("创建测试任务失败:", error);
     throw error; // 让错误传递给调用者，以便UI可以显示错误消息
   }
+}
+
+// 通知监听器 - 处理通知接收时的语音播报
+export function setupNotificationHandler() {
+  console.log("设置通知处理器");
+  
+  // 设置通知接收监听器
+  Notifications.addNotificationReceivedListener((notification) => {
+    console.log("收到通知:", notification);
+    
+    const { title, body, data } = notification.request.content;
+    
+    // 检查通知数据，决定是否需要语音播报
+    if (data?.hasVoice !== false) { // 默认开启语音播报，除非明确设置为false
+      console.log("准备为收到的通知进行语音播报");
+      speakNotification(title || "通知", body || "");
+    }
+  });
+  
+  // 设置通知响应监听器（用户点击通知时）
+  Notifications.addNotificationResponseReceivedListener((response) => {
+    console.log("用户响应通知:", response);
+    
+    const { title, body, data } = response.notification.request.content;
+    
+    // 如果通知包含任务信息，可以在这里添加特殊处理逻辑
+    if (data?.type === 'task_start') {
+      console.log("用户点击了任务开始通知:", data.taskName);
+    } else if (data?.type === 'task_end') {
+      console.log("用户点击了任务结束通知:", data.taskName);
+    }
+  });
+}
+
+// 带语音播报的任务通知创建函数
+export async function scheduleTaskNotificationWithVoice(task: TaskOut, diffSeconds: number, notificationType: 'start' | 'end') {
+  const title = notificationType === 'start' ? '任务开始' : '任务结束';
+  const body = notificationType === 'start' 
+    ? `现在开始：${task.name}` 
+    : `${task.name} 已结束，请反馈完成情况`;
+    
+  const notificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      sound: true,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      badge: 1,
+      data: { 
+        type: `task_${notificationType}`, 
+        taskName: task.name, 
+        taskId: task.id,
+        taskTime: notificationType === 'start' ? task.scheduledParam?.startTime : task.scheduledParam?.endTime,
+        hasVoice: true // 标记此通知需要语音播报
+      },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: diffSeconds,
+      repeats: false,
+    },
+  });
+  
+  return notificationId;
 }
